@@ -32,3 +32,11 @@ class ToolNotFoundError(ToolExecutionError):
 
 class ToolPermissionError(ToolExecutionError):
     """Raised when a run has not been granted a tool's required permissions."""
+
+
+class KnowledgeValidationError(AgentStudioError):
+    """Raised when knowledge input or uploaded content is unsafe or unsupported."""
+
+
+class DocumentParsingError(AgentStudioError):
+    """Raised when a document cannot be converted into searchable text."""

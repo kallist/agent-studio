@@ -14,7 +14,10 @@ from app.persistence.database import settings
 async def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
     database_path = (tmp_path / "test.db").as_posix()
     monkeypatch.setattr(settings, "openai_api_key", None)
-    app = create_app(f"sqlite+aiosqlite:///{database_path}")
+    app = create_app(
+        f"sqlite+aiosqlite:///{database_path}",
+        knowledge_storage_path=str(tmp_path / "knowledge"),
+    )
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as http:

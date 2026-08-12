@@ -33,6 +33,9 @@ def to_agent(model: AgentModel) -> AgentDefinition:
         runtime_mode=RuntimeMode(model.runtime_mode),
         model=model.model,
         tools=json.loads(model.tools_json),
+        knowledge_base_ids=[
+            UUID(value) for value in json.loads(model.knowledge_base_ids_json or "[]")
+        ],
         created_at=_aware(model.created_at),
     )
 
@@ -73,6 +76,9 @@ class Repositories:
                 runtime_mode=data.runtime_mode.value,
                 model=data.model,
                 tools_json=json.dumps(data.tools),
+                knowledge_base_ids_json=json.dumps(
+                    [str(value) for value in data.knowledge_base_ids]
+                ),
             )
             session.add(model)
             await session.commit()
@@ -90,6 +96,19 @@ class Repositories:
             if model is None:
                 raise EntityNotFoundError(f"Agent '{agent_id}' was not found.")
             return to_agent(model)
+
+    async def knowledge_bases_exist(self, knowledge_base_ids: list[UUID]) -> bool:
+        if not knowledge_base_ids:
+            return True
+        from app.persistence.models import KnowledgeBaseModel
+
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(KnowledgeBaseModel.id).where(
+                    KnowledgeBaseModel.id.in_([str(value) for value in knowledge_base_ids])
+                )
+            )
+            return len(set(rows)) == len(set(knowledge_base_ids))
 
     async def create_run(self, agent_id: UUID, user_input: str) -> RunResult:
         async with self._sessions() as session:

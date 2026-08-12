@@ -45,6 +45,7 @@ screenshots/
 *.db-wal
 *.sqlite
 *.sqlite3
+data/
 
 # Logs and temporary files
 *.log

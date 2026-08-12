@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import Link from "next/link";
 
 import { TraceTimeline } from "@/components/trace-timeline";
+import { KnowledgeStudio } from "@/components/knowledge-studio";
 import {
   AgentDefinition,
   AgentEvent,
@@ -11,6 +12,7 @@ import {
   eventTypes,
   RunResult,
   RuntimeMode,
+  KnowledgeBase,
 } from "@/lib/api";
 
 const defaultInput = "计算 128 * 37 + 456";
@@ -25,6 +27,8 @@ export function Studio() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [agentKnowledgeBaseId, setAgentKnowledgeBaseId] = useState("");
   const streamRef = useRef<EventSource | null>(null);
 
   const selected = useMemo(
@@ -86,9 +90,13 @@ export function Studio() {
     let active = true;
     async function load() {
       try {
-        const loadedAgents = await api.listAgents();
+        const [loadedAgents, loadedBases] = await Promise.all([
+          api.listAgents(),
+          api.listKnowledgeBases(),
+        ]);
         if (!active) return;
         setAgents(loadedAgents);
+        setKnowledgeBases(loadedBases);
         const params = new URLSearchParams(window.location.search);
         const agentId = params.get("agent");
         const runId = params.get("run");
@@ -141,7 +149,10 @@ export function Studio() {
         name: String(data.get("name")),
         instructions: String(data.get("instructions")),
         runtime_mode: String(data.get("runtime_mode")) as RuntimeMode,
-        tools: ["calculator"],
+        tools: data.get("knowledge_base_id") ? ["knowledge_search"] : ["calculator"],
+        knowledge_base_ids: data.get("knowledge_base_id")
+          ? [String(data.get("knowledge_base_id"))]
+          : [],
       });
       setAgents((current) => [created, ...current]);
       setSelectedId(created.id);
@@ -235,9 +246,20 @@ export function Studio() {
               <option value="openai">OpenAI · opt-in credential</option>
             </select>
           </label>
+          <label>
+            Knowledge base
+            <select
+              name="knowledge_base_id"
+              value={agentKnowledgeBaseId}
+              onChange={(event) => setAgentKnowledgeBaseId(event.target.value)}
+            >
+              <option value="">None · calculator agent</option>
+              {knowledgeBases.map((base) => <option value={base.id} key={base.id}>{base.name}</option>)}
+            </select>
+          </label>
           <div className="tool-field">
             <span>Enabled tool</span>
-            <strong>✓ calculator</strong>
+            <strong>{agentKnowledgeBaseId ? "✓ knowledge_search" : "✓ calculator"}</strong>
           </div>
           <button className="primary-button" disabled={submitting}>
             {submitting ? "保存中…" : "保存 Agent"}
@@ -335,6 +357,7 @@ export function Studio() {
           <TraceTimeline events={events} />
         </aside>
       </div>
+      <KnowledgeStudio bases={knowledgeBases} onBasesChange={setKnowledgeBases} />
     </main>
   );
 }

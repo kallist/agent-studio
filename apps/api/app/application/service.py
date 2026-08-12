@@ -65,6 +65,12 @@ class AgentService:
         if unknown:
             names = ", ".join(sorted(unknown))
             raise ValueError(f"Unknown tools: {names}")
+        if request.knowledge_base_ids and "knowledge_search" not in request.tools:
+            raise ValueError("knowledge_search must be enabled when knowledge bases are attached.")
+        if "knowledge_search" in request.tools and not request.knowledge_base_ids:
+            raise ValueError("knowledge_search requires at least one knowledge base.")
+        if not await self._repositories.knowledge_bases_exist(request.knowledge_base_ids):
+            raise ValueError("One or more knowledge bases do not exist.")
         return await self._repositories.create_agent(request)
 
     async def list_agents(self) -> list[AgentDefinition]:
@@ -145,8 +151,16 @@ class AgentService:
             )
         )
         try:
+            granted_permissions = {"compute"}
+            if "knowledge_search" in agent.tools and agent.knowledge_base_ids:
+                granted_permissions.add("knowledge:read")
             output = await runtime.run(
-                RuntimeInput(run_id=run.id, agent=agent, user_input=run.input),
+                RuntimeInput(
+                    run_id=run.id,
+                    agent=agent,
+                    user_input=run.input,
+                    granted_permissions=granted_permissions,
+                ),
                 emit,
                 cancellation,
             )

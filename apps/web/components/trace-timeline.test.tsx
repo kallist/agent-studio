@@ -18,7 +18,24 @@ describe("TraceTimeline", () => {
         sequence: 1,
         type: "tool.completed",
         timestamp: new Date().toISOString(),
-        payload: { tool: "calculator", result: "5192", latency_ms: 1.2 },
+        payload: {
+          tool: "knowledge_search",
+          result: {
+            query: "ownership",
+            algorithm: "hybrid",
+            results: [
+              {
+                document: "handbook.md",
+                chunk_id: "chunk-1",
+                chunk_index: 2,
+                source: "upload://handbook.md",
+                score: 0.9123,
+                content: "Agent Studio keeps knowledge retrieval application-owned.",
+              },
+            ],
+          },
+          latency_ms: 1.2,
+        },
       },
       {
         event_id: "two",
@@ -32,6 +49,8 @@ describe("TraceTimeline", () => {
     render(<TraceTimeline events={events} />);
     expect(screen.getByText("Tool result")).toBeInTheDocument();
     expect(screen.getByText("Final answer")).toBeInTheDocument();
-    expect(screen.getAllByText("5192")).toHaveLength(2);
+    expect(screen.getByText("5192")).toBeInTheDocument();
+    expect(screen.getByText(/handbook\.md · score 0\.912/)).toBeInTheDocument();
+    expect(screen.getByText(/upload:\/\/handbook\.md/)).toBeInTheDocument();
   });
 });

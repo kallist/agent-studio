@@ -2,25 +2,61 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
 
 from app.api.routes import router
 from app.application.service import AgentService
-from app.domain.contracts import RuntimeMode
+from app.domain.contracts import EmbeddingProvider, RuntimeMode
+from app.knowledge.embeddings import DeterministicEmbeddingProvider, OpenAIEmbeddingProvider
+from app.knowledge.repository import KnowledgeRepository
+from app.knowledge.service import KnowledgeService
+from app.knowledge.vector_store import PgVectorStore, SqlAlchemyVectorStore
+from app.knowledge.worker import LocalIngestionWorker
 from app.persistence.database import build_database, settings
 from app.persistence.models import Base
 from app.persistence.repositories import Repositories
 from app.runtime.agents_sdk import AgentsSdkRuntime
 from app.runtime.mock import MockRuntime
 from app.runtime.providers import OpenAIProvider
+from app.tools.knowledge_search import KnowledgeSearchTool
 from app.tools.registry import ToolExecutor, default_tool_registry
 
 
-def create_app(database_url: str | None = None) -> FastAPI:
-    engine, sessions = build_database(database_url or settings.database_url)
-    registry = default_tool_registry()
+def create_app(
+    database_url: str | None = None, knowledge_storage_path: str | None = None
+) -> FastAPI:
+    resolved_database_url = database_url or settings.database_url
+    engine, sessions = build_database(resolved_database_url)
+    embeddings: EmbeddingProvider
+    if settings.embedding_provider == "openai":
+        if not settings.openai_api_key:
+            raise RuntimeError("EMBEDDING_PROVIDER=openai requires OPENAI_API_KEY.")
+        embeddings = OpenAIEmbeddingProvider(
+            settings.openai_api_key, settings.openai_embedding_model
+        )
+    else:
+        embeddings = DeterministicEmbeddingProvider()
+    knowledge_repository = KnowledgeRepository(sessions)
+    vector_store = (
+        PgVectorStore(sessions)
+        if resolved_database_url.startswith("postgresql")
+        else SqlAlchemyVectorStore(sessions)
+    )
+    knowledge_service = KnowledgeService(
+        knowledge_repository,
+        vector_store,
+        embeddings,
+        Path(knowledge_storage_path or settings.knowledge_storage_path),
+        settings.knowledge_max_file_bytes,
+    )
+    worker = LocalIngestionWorker(knowledge_service, settings.knowledge_worker_count)
+    knowledge_service.bind_enqueue(worker.enqueue)
+    registry = default_tool_registry([KnowledgeSearchTool(knowledge_service).as_tool()])
     executor = ToolExecutor(registry)
     repositories = Repositories(sessions)
     provider = OpenAIProvider(
@@ -41,8 +77,13 @@ def create_app(database_url: str | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+            await connection.run_sync(_apply_lightweight_schema_migrations)
+        await vector_store.initialize()
         app.state.agent_service = service
+        app.state.knowledge_service = knowledge_service
+        await worker.start()
         yield
+        await worker.stop()
         await engine.dispose()
 
     app = FastAPI(title="Agent Studio API", version="0.1.0", lifespan=lifespan)
@@ -58,3 +99,15 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
 
 app = create_app()
+
+
+def _apply_lightweight_schema_migrations(connection: Connection) -> None:
+    """Bridge the pre-Alembic local schema until the first formal migration baseline."""
+    columns = {column["name"] for column in inspect(connection).get_columns("agents")}
+    if "knowledge_base_ids_json" not in columns:
+        connection.execute(
+            text(
+                "ALTER TABLE agents ADD COLUMN knowledge_base_ids_json "
+                "TEXT DEFAULT '[]'"
+            )
+        )
