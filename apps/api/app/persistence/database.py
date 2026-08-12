@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.6-terra"
     openai_agents_disable_tracing: bool = True
     cors_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
+    knowledge_storage_path: str = "./data/knowledge"
+    knowledge_max_file_bytes: int = 10 * 1024 * 1024
+    knowledge_worker_count: int = 1
+    embedding_provider: str = "local"
+    openai_embedding_model: str = "text-embedding-3-small"
 
 
 settings = Settings()

@@ -8,7 +8,9 @@ dependencies = [
   "asyncpg==0.31.0",
   "fastapi==0.135.1",
   "openai-agents==0.20.0",
+  "pypdf==6.15.0",
   "pydantic-settings==2.13.1",
+  "python-multipart==0.0.22",
   "sqlalchemy==2.0.48",
   "uvicorn[standard]==0.42.0",
 ]
@@ -47,5 +49,5 @@ plugins = ["pydantic.mypy"]
 exclude = ["tests"]
 
 [[tool.mypy.overrides]]
-module = ["agents", "agents.*"]
+module = ["agents", "agents.*", "pypdf", "pypdf.*"]
 ignore_missing_imports = true

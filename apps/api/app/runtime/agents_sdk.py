@@ -29,6 +29,7 @@ from app.domain.errors import (
 )
 from app.runtime.engine import AgentLoop
 from app.runtime.providers import OpenAIProvider
+from app.tools.knowledge_search import bind_knowledge_bases
 from app.tools.registry import ToolExecutor
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,7 @@ class AgentsSdkRuntime:
         provider = _AgentsSdkDecisionProvider(self._provider, runtime_input)
         loop = AgentLoop(provider, self._tools, runtime_name="openai")
         try:
-            return await loop.run(runtime_input, emit, cancellation)
+            with bind_knowledge_bases(runtime_input.agent.knowledge_base_ids):
+                return await loop.run(runtime_input, emit, cancellation)
         finally:
             await provider.close()

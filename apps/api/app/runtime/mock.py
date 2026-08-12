@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.domain.contracts import AgentRun, CancellationToken, EventSink, RuntimeInput
 from app.runtime.engine import AgentLoop
 from app.runtime.providers import MockProvider
+from app.tools.knowledge_search import bind_knowledge_bases
 from app.tools.registry import ToolExecutor
 
 
@@ -22,4 +23,5 @@ class MockRuntime:
         emit: EventSink,
         cancellation: CancellationToken | None = None,
     ) -> AgentRun:
-        return await self._loop.run(runtime_input, emit, cancellation)
+        with bind_knowledge_bases(runtime_input.agent.knowledge_base_ids):
+            return await self._loop.run(runtime_input, emit, cancellation)

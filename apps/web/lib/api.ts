@@ -22,6 +22,7 @@ export interface AgentDefinition {
   runtime_mode: RuntimeMode;
   model: string | null;
   tools: string[];
+  knowledge_base_ids: string[];
   created_at: string;
 }
 
@@ -52,7 +53,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${API_URL}${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...init?.headers },
+      headers: {
+        ...(init?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+        ...init?.headers,
+      },
     });
   } catch {
     throw new Error("无法连接 Agent Studio API。请确认后端已在 8000 端口运行。");
@@ -71,6 +75,7 @@ export const api = {
     instructions: string;
     runtime_mode: RuntimeMode;
     tools: string[];
+    knowledge_base_ids?: string[];
   }) => request<AgentDefinition>("/agents", { method: "POST", body: JSON.stringify(payload) }),
   createRun: (agentId: string, input: string) =>
     request<RunResult>(`/agents/${agentId}/runs`, {
@@ -81,7 +86,84 @@ export const api = {
   listEvents: (runId: string) => request<AgentEvent[]>(`/runs/${runId}/events`),
   streamUrl: (runId: string, afterSequence = 0) =>
     `${API_URL}/runs/${runId}/stream?after_sequence=${afterSequence}`,
+  listKnowledgeBases: () => request<KnowledgeBase[]>("/knowledge-bases"),
+  createKnowledgeBase: (name: string, description: string) =>
+    request<KnowledgeBase>("/knowledge-bases", {
+      method: "POST",
+      body: JSON.stringify({ name, description }),
+    }),
+  listDocuments: (knowledgeBaseId: string) =>
+    request<KnowledgeDocument[]>(`/knowledge-bases/${knowledgeBaseId}/documents`),
+  uploadDocument: (knowledgeBaseId: string, file: File) => {
+    const data = new FormData();
+    data.set("file", file);
+    return request<DocumentUploadAccepted>(`/knowledge-bases/${knowledgeBaseId}/documents`, {
+      method: "POST",
+      body: data,
+    });
+  },
+  getIngestionJob: (jobId: string) => request<IngestionJob>(`/ingestion-jobs/${jobId}`),
+  searchKnowledge: (knowledgeBaseId: string, query: string, topK = 5) =>
+    request<KnowledgeSearchResponse>(`/knowledge-bases/${knowledgeBaseId}/search`, {
+      method: "POST",
+      body: JSON.stringify({ query, top_k: topK, hybrid: true }),
+    }),
 };
+
+export type IngestionState = "queued" | "processing" | "completed" | "failed";
+
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  description: string;
+  embedding_provider: string;
+  embedding_model: string;
+  created_at: string;
+  document_count: number;
+}
+
+export interface IngestionJob {
+  id: string;
+  document_id: string;
+  state: IngestionState;
+  error: string | null;
+  queued_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface KnowledgeDocument {
+  id: string;
+  knowledge_base_id: string;
+  filename: string;
+  source: string;
+  mime_type: string;
+  size_bytes: number;
+  created_at: string;
+  ingestion: IngestionJob | null;
+}
+
+export interface DocumentUploadAccepted {
+  document: KnowledgeDocument;
+  ingestion_job: IngestionJob;
+}
+
+export interface KnowledgeCitation {
+  document_id: string;
+  document: string;
+  chunk_id: string;
+  chunk_index: number;
+  source: string;
+  score: number;
+  content: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface KnowledgeSearchResponse {
+  query: string;
+  algorithm: "semantic" | "hybrid";
+  results: KnowledgeCitation[];
+}
 
 export const eventTypes: EventType[] = [
   "run.started",

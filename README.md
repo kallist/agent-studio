@@ -10,6 +10,8 @@ The first runnable vertical slice now supports:
 - an OpenAI Agents SDK adapter behind the application-owned `AgentRuntime` port;
 - FastAPI endpoints plus same-origin SSE streaming;
 - a responsive Next.js playground and ordered trace timeline;
+- knowledge bases with secure txt/Markdown/PDF ingestion, asynchronous job states, chunking, embeddings, vector search, and inspectable citations;
+- deterministic local RAG plus an opt-in OpenAI embedding provider and PostgreSQL/pgvector adapter;
 - SQLite local persistence as a documented fallback while Docker Desktop is unavailable.
 
 See [ADR-001](docs/ADR/001-agent-runtime.md) for the accepted hybrid runtime boundary.
@@ -72,9 +74,15 @@ infra/          local infrastructure notes
 tests/          cross-application testing notes
 ```
 
+## Knowledge and RAG
+
+Create a knowledge base in the web UI, upload a supported document, wait for its ingestion state to become `completed`, and test retrieval directly. A new agent can attach one knowledge base and enable `knowledge_search`; source chunks and scores appear in the run trace.
+
+The upload endpoint returns 202 after validation and durable job creation. The local worker handles parsing and embeddings in the background. See [RAG design](docs/RAG_DESIGN.md) for data models, chunking, retrieval, security, benchmark coverage, and production limitations.
+
 ## Roadmap (not implemented)
 
-RAG/knowledge bases, durable memory policy, evaluation workflows, and multi-agent orchestration remain intentionally out of scope for this vertical slice.
+Durable memory policy, full evaluation workflows, and multi-agent orchestration remain out of scope for this vertical slice.
 
 ## Security
 

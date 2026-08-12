@@ -136,26 +136,26 @@ class ToolExecutor:
         )
 
 
-def default_tool_registry() -> ToolRegistry:
+def default_tool_registry(extra_tools: list[Tool] | None = None) -> ToolRegistry:
     async def calculator_handler(payload: BaseModel) -> CalculatorOutput:
         calculator_input = CalculatorInput.model_validate(payload.model_dump())
         return CalculatorOutput(result=calculate(calculator_input.expression))
 
-    return ToolRegistry(
-        [
-            Tool(
-                definition=ToolDefinition(
-                    name="calculator",
-                    description=(
-                        "Safely evaluate arithmetic using +, -, *, /, unary signs, and parentheses."
-                    ),
-                    input_schema=CalculatorInput,
-                    output_schema=CalculatorOutput,
-                    timeout_seconds=2.0,
-                    permissions=frozenset({"compute"}),
-                    output_limit=2_000,
+    tools = [
+        Tool(
+            definition=ToolDefinition(
+                name="calculator",
+                description=(
+                    "Safely evaluate arithmetic using +, -, *, /, unary signs, and parentheses."
                 ),
-                handler=calculator_handler,
-            )
-        ]
-    )
+                input_schema=CalculatorInput,
+                output_schema=CalculatorOutput,
+                timeout_seconds=2.0,
+                permissions=frozenset({"compute"}),
+                output_limit=2_000,
+            ),
+            handler=calculator_handler,
+        )
+    ]
+    tools.extend(extra_tools or [])
+    return ToolRegistry(tools)

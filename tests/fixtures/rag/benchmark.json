@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "question": "What architecture keeps the Agents SDK isolated?",
+      "expected_document": "agent_studio.md",
+      "expected_phrase": "hybrid architecture"
+    },
+    {
+      "question": "Which provider lets tests run without an API key?",
+      "expected_document": "agent_studio.md",
+      "expected_phrase": "MockProvider"
+    },
+    {
+      "question": "How are path traversal and parser failures handled for uploads?",
+      "expected_document": "security_policy.txt",
+      "expected_phrase": "path traversal"
+    }
+  ]
+}

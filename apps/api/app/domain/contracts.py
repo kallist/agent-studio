@@ -22,6 +22,13 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class IngestionState(StrEnum):
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class AgentPhase(StrEnum):
     CREATED = "created"
     RUNNING = "running"
@@ -77,6 +84,7 @@ class AgentDefinition(BaseModel):
     runtime_mode: RuntimeMode
     model: str | None = None
     tools: list[str]
+    knowledge_base_ids: list[UUID] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -86,6 +94,7 @@ class AgentCreate(BaseModel):
     runtime_mode: RuntimeMode = RuntimeMode.MOCK
     model: str | None = Field(default=None, max_length=120)
     tools: list[str] = Field(default_factory=lambda: ["calculator"], max_length=20)
+    knowledge_base_ids: list[UUID] = Field(default_factory=list, max_length=20)
 
 
 class RunRequest(BaseModel):
@@ -236,3 +245,116 @@ class AgentRuntime(Protocol):
 
 class EventStream(Protocol):
     def subscribe(self, run_id: UUID, after_sequence: int = 0) -> AsyncIterator[AgentEvent]: ...
+
+
+class KnowledgeBaseCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2_000)
+
+
+class KnowledgeBaseView(BaseModel):
+    id: UUID
+    name: str
+    description: str
+    embedding_provider: str
+    embedding_model: str
+    created_at: datetime
+    document_count: int = 0
+
+
+class IngestionJobView(BaseModel):
+    id: UUID
+    document_id: UUID
+    state: IngestionState
+    error: str | None = None
+    queued_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class DocumentView(BaseModel):
+    id: UUID
+    knowledge_base_id: UUID
+    filename: str
+    source: str
+    mime_type: str
+    size_bytes: int
+    created_at: datetime
+    ingestion: IngestionJobView | None = None
+
+
+class DocumentUploadAccepted(BaseModel):
+    document: DocumentView
+    ingestion_job: IngestionJobView
+
+
+class RetrievalFilters(BaseModel):
+    document_id: UUID | None = None
+    source: str | None = Field(default=None, max_length=500)
+    filename: str | None = Field(default=None, max_length=255)
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=4_000)
+    top_k: int = Field(default=5, ge=1, le=20)
+    filters: RetrievalFilters | None = None
+    hybrid: bool = True
+
+
+class KnowledgeCitation(BaseModel):
+    document_id: UUID
+    document: str
+    chunk_id: UUID
+    chunk_index: int
+    source: str
+    score: float
+    content: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeSearchResponse(BaseModel):
+    query: str
+    algorithm: Literal["semantic", "hybrid"]
+    results: list[KnowledgeCitation]
+
+
+class EmbeddingVector(BaseModel):
+    chunk_id: UUID
+    vector: list[float]
+    provider: str
+    model: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class VectorMatch(BaseModel):
+    chunk_id: UUID
+    score: float
+
+
+class EmbeddingProvider(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def dimensions(self) -> int: ...
+
+    async def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
+class VectorStore(Protocol):
+    async def initialize(self) -> None: ...
+
+    async def upsert(self, records: list[EmbeddingVector]) -> None: ...
+
+    async def delete_document(self, document_id: UUID) -> None: ...
+
+    async def search(
+        self,
+        knowledge_base_ids: list[UUID],
+        query_vector: list[float],
+        top_k: int,
+        filters: RetrievalFilters | None = None,
+    ) -> list[VectorMatch]: ...

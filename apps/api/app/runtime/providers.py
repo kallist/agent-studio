@@ -27,6 +27,24 @@ class MockProvider:
         if context.steps:
             result = context.steps[-1].tool_result
             if result is not None and result.output is not None:
+                if result.tool_name == "knowledge_search":
+                    raw_results = result.output.get("results")
+                    if isinstance(raw_results, list) and raw_results:
+                        first = raw_results[0]
+                        if isinstance(first, dict):
+                            content = str(first.get("content", ""))
+                            document = str(first.get("document", "Source"))
+                            source = str(first.get("source", ""))
+                            return AgentDecision(
+                                action="final",
+                                final_output=(
+                                    f"{content[:16_000]}\n\nSource: {document} ({source})"
+                                ),
+                            )
+                    return AgentDecision(
+                        action="final",
+                        final_output="No relevant knowledge source was found.",
+                    )
                 final = result.output.get("result")
                 if isinstance(final, str):
                     return AgentDecision(action="final", final_output=final)
@@ -38,6 +56,14 @@ class MockProvider:
             return AgentDecision(
                 action="tool",
                 tool_call=ToolCall(name="calculator", arguments={"expression": expression}),
+            )
+        if "knowledge_search" in available_tools:
+            return AgentDecision(
+                action="tool",
+                tool_call=ToolCall(
+                    name="knowledge_search",
+                    arguments={"query": context.user_input, "top_k": 5},
+                ),
             )
         return AgentDecision(
             action="final",
