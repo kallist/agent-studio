@@ -11,6 +11,8 @@ export type EventType =
   | "tool.completed"
   | "tool.failed"
   | "step.completed"
+  | "memory.retrieved"
+  | "memory.written"
   | "run.completed"
   | "run.failed"
   | "run.cancelled";
@@ -23,7 +25,20 @@ export interface AgentDefinition {
   model: string | null;
   tools: string[];
   knowledge_base_ids: string[];
+  memory_enabled: boolean;
   created_at: string;
+}
+
+export interface MemoryRecord {
+  id: string;
+  agent_id: string;
+  kind: "conversation" | "working" | "long_term";
+  content: string;
+  importance: number;
+  source_run_id: string | null;
+  created_at: string;
+  expires_at: string | null;
+  metadata: Record<string, unknown>;
 }
 
 export interface RunResult {
@@ -65,6 +80,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await response.json().catch(() => null)) as { detail?: string } | null;
     throw new Error(body?.detail ?? `API 请求失败 (${response.status})`);
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -76,6 +92,7 @@ export const api = {
     runtime_mode: RuntimeMode;
     tools: string[];
     knowledge_base_ids?: string[];
+    memory_enabled?: boolean;
   }) => request<AgentDefinition>("/agents", { method: "POST", body: JSON.stringify(payload) }),
   createRun: (agentId: string, input: string) =>
     request<RunResult>(`/agents/${agentId}/runs`, {
@@ -84,6 +101,15 @@ export const api = {
     }),
   getRun: (runId: string) => request<RunResult>(`/runs/${runId}`),
   listEvents: (runId: string) => request<AgentEvent[]>(`/runs/${runId}/events`),
+  listMemories: (agentId: string) =>
+    request<MemoryRecord[]>(`/agents/${agentId}/memories`),
+  setMemoryEnabled: (agentId: string, enabled: boolean) =>
+    request<{ agent_id: string; enabled: boolean }>(`/agents/${agentId}/memory-settings`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  deleteMemory: (agentId: string, memoryId: string) =>
+    request<void>(`/agents/${agentId}/memories/${memoryId}`, { method: "DELETE" }),
   streamUrl: (runId: string, afterSequence = 0) =>
     `${API_URL}/runs/${runId}/stream?after_sequence=${afterSequence}`,
   listKnowledgeBases: () => request<KnowledgeBase[]>("/knowledge-bases"),
@@ -176,6 +202,8 @@ export const eventTypes: EventType[] = [
   "tool.completed",
   "tool.failed",
   "step.completed",
+  "memory.retrieved",
+  "memory.written",
   "run.completed",
   "run.failed",
   "run.cancelled",

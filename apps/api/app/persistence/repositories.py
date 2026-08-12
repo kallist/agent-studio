@@ -18,14 +18,20 @@ from app.domain.contracts import (
     RuntimeMode,
 )
 from app.domain.errors import EntityNotFoundError
-from app.persistence.models import AgentModel, RunEventModel, RunModel
+from app.memory.contracts import MemorySettings
+from app.persistence.models import (
+    AgentMemorySettingModel,
+    AgentModel,
+    RunEventModel,
+    RunModel,
+)
 
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
-def to_agent(model: AgentModel) -> AgentDefinition:
+def to_agent(model: AgentModel, *, memory_enabled: bool = True) -> AgentDefinition:
     return AgentDefinition(
         id=UUID(model.id),
         name=model.name,
@@ -36,6 +42,7 @@ def to_agent(model: AgentModel) -> AgentDefinition:
         knowledge_base_ids=[
             UUID(value) for value in json.loads(model.knowledge_base_ids_json or "[]")
         ],
+        memory_enabled=memory_enabled,
         created_at=_aware(model.created_at),
     )
 
@@ -81,21 +88,48 @@ class Repositories:
                 ),
             )
             session.add(model)
+            await session.flush()
+            session.add(
+                AgentMemorySettingModel(
+                    agent_id=model.id,
+                    enabled=data.memory_enabled,
+                )
+            )
             await session.commit()
             await session.refresh(model)
-            return to_agent(model)
+            return to_agent(model, memory_enabled=data.memory_enabled)
 
     async def list_agents(self) -> list[AgentDefinition]:
         async with self._sessions() as session:
             rows = await session.scalars(select(AgentModel).order_by(AgentModel.created_at.desc()))
-            return [to_agent(row) for row in rows]
+            agents = list(rows)
+            settings = await session.scalars(select(AgentMemorySettingModel))
+            enabled_by_agent = {row.agent_id: row.enabled for row in settings}
+            return [
+                to_agent(row, memory_enabled=enabled_by_agent.get(row.id, True)) for row in agents
+            ]
 
     async def get_agent(self, agent_id: UUID) -> AgentDefinition:
         async with self._sessions() as session:
             model = await session.get(AgentModel, str(agent_id))
             if model is None:
                 raise EntityNotFoundError(f"Agent '{agent_id}' was not found.")
-            return to_agent(model)
+            setting = await session.get(AgentMemorySettingModel, str(agent_id))
+            return to_agent(model, memory_enabled=setting.enabled if setting else True)
+
+    async def set_memory_enabled(self, agent_id: UUID, enabled: bool) -> MemorySettings:
+        async with self._sessions() as session:
+            agent = await session.get(AgentModel, str(agent_id))
+            if agent is None:
+                raise EntityNotFoundError(f"Agent '{agent_id}' was not found.")
+            setting = await session.get(AgentMemorySettingModel, str(agent_id))
+            if setting is None:
+                setting = AgentMemorySettingModel(agent_id=str(agent_id), enabled=enabled)
+                session.add(setting)
+            else:
+                setting.enabled = enabled
+            await session.commit()
+            return MemorySettings(agent_id=agent_id, enabled=enabled)
 
     async def knowledge_bases_exist(self, knowledge_base_ids: list[UUID]) -> bool:
         if not knowledge_base_ids:

@@ -30,6 +30,7 @@ from app.domain.errors import (
     ProviderNotConfiguredError,
 )
 from app.knowledge.service import KnowledgeService
+from app.memory.contracts import MemoryRecord, MemorySettings, MemorySettingsUpdate
 from app.persistence.database import settings
 
 router = APIRouter()
@@ -71,6 +72,41 @@ async def list_agents(service: ServiceDependency) -> list[AgentDefinition]:
 async def get_agent(agent_id: UUID, service: ServiceDependency) -> AgentDefinition:
     try:
         return await service.get_agent(agent_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/agents/{agent_id}/memory-settings", response_model=MemorySettings)
+async def update_memory_settings(
+    agent_id: UUID,
+    payload: MemorySettingsUpdate,
+    service: ServiceDependency,
+) -> MemorySettings:
+    try:
+        return await service.set_memory_enabled(agent_id, payload.enabled)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/agents/{agent_id}/memories", response_model=list[MemoryRecord])
+async def list_memories(agent_id: UUID, service: ServiceDependency) -> list[MemoryRecord]:
+    try:
+        return await service.list_memories(agent_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/agents/{agent_id}/memories/{memory_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_memory(
+    agent_id: UUID,
+    memory_id: UUID,
+    service: ServiceDependency,
+) -> None:
+    try:
+        await service.delete_memory(agent_id, memory_id)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

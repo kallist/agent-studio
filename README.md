@@ -12,9 +12,11 @@ The first runnable vertical slice now supports:
 - a responsive Next.js playground and ordered trace timeline;
 - knowledge bases with secure txt/Markdown/PDF ingestion, asynchronous job states, chunking, embeddings, vector search, and inspectable citations;
 - deterministic local RAG plus an opt-in OpenAI embedding provider and PostgreSQL/pgvector adapter;
+- application-owned conversation, working, and policy-gated long-term memory;
 - SQLite local persistence as a documented fallback while Docker Desktop is unavailable.
 
 See [ADR-001](docs/ADR/001-agent-runtime.md) for the accepted hybrid runtime boundary.
+See [Memory System v1](docs/MEMORY_DESIGN.md) for write, retrieval, expiration, deletion, and isolation policy.
 
 ## Quick start
 
@@ -82,7 +84,7 @@ The upload endpoint returns 202 after validation and durable job creation. The l
 
 ## Roadmap (not implemented)
 
-Durable memory policy, full evaluation workflows, and multi-agent orchestration remain out of scope for this vertical slice.
+Full evaluation workflows and multi-agent orchestration remain out of scope for this vertical slice.
 
 ## Security
 

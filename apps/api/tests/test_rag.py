@@ -274,6 +274,55 @@ async def test_mock_agent_uses_knowledge_search_and_preserves_citations(
     assert events[-1]["type"] == "run.completed"
 
 
+@pytest.mark.asyncio
+async def test_agent_memory_and_knowledge_search_coexist(client: AsyncClient) -> None:
+    base = await create_base(client, "Memory and RAG")
+    base_id = str(base["id"])
+    await upload_fixture(client, base_id, "agent_studio.md", "text/markdown")
+    agent_response = await client.post(
+        "/agents",
+        json={
+            "name": "Memory and Knowledge Agent",
+            "instructions": "Use relevant memory and attached knowledge.",
+            "runtime_mode": "mock",
+            "tools": ["knowledge_search"],
+            "knowledge_base_ids": [base_id],
+            "memory_enabled": True,
+        },
+    )
+    assert agent_response.status_code == 201
+    agent_id = agent_response.json()["id"]
+
+    async def run(input_text: str) -> tuple[dict[str, object], list[dict[str, object]]]:
+        accepted = await client.post(f"/agents/{agent_id}/runs", json={"input": input_text})
+        assert accepted.status_code == 202
+        run_id = accepted.json()["id"]
+        current: dict[str, object] = {}
+        for _ in range(200):
+            current = (await client.get(f"/runs/{run_id}")).json()
+            if current["status"] in {"completed", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        assert current["status"] == "completed"
+        events = (await client.get(f"/runs/{run_id}/events")).json()
+        return current, events
+
+    _, first_events = await run("Remember that project codename is Atlas.")
+    assert any(
+        event["type"] == "tool.completed" and event["payload"]["tool"] == "knowledge_search"
+        for event in first_events
+    )
+    assert any(event["type"] == "memory.written" for event in first_events)
+
+    _, second_events = await run("What is the project codename?")
+    assert any(event["type"] == "memory.retrieved" for event in second_events)
+    assert any(
+        event["type"] == "tool.completed" and event["payload"]["tool"] == "knowledge_search"
+        for event in second_events
+    )
+    assert second_events[-1]["type"] == "run.completed"
+
+
 def test_knowledge_search_tool_declares_hardened_contract() -> None:
     tool = KnowledgeSearchTool(cast(KnowledgeService, object())).as_tool()
     definition = tool.definition

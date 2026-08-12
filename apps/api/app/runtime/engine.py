@@ -391,6 +391,7 @@ class AgentLoop:
                 user_input=runtime_input.user_input,
                 tools=specs,
                 steps=[step, *included],
+                memory=runtime_input.memory,
                 omitted_steps=len(steps) - len(included) - 1,
             )
             if len(candidate.model_dump_json()) > runtime_input.limits.max_context_chars:
@@ -401,6 +402,7 @@ class AgentLoop:
             user_input=runtime_input.user_input,
             tools=specs,
             steps=included,
+            memory=runtime_input.memory,
             omitted_steps=len(steps) - len(included),
         )
         if len(context.model_dump_json()) > runtime_input.limits.max_context_chars:

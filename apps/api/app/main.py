@@ -17,6 +17,9 @@ from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.service import KnowledgeService
 from app.knowledge.vector_store import PgVectorStore, SqlAlchemyVectorStore
 from app.knowledge.worker import LocalIngestionWorker
+from app.memory.policy import MemoryPolicy
+from app.memory.retriever import MemoryRetriever
+from app.memory.store import SqlAlchemyMemoryStore
 from app.persistence.database import build_database, settings
 from app.persistence.models import Base
 from app.persistence.repositories import Repositories
@@ -59,6 +62,9 @@ def create_app(
     registry = default_tool_registry([KnowledgeSearchTool(knowledge_service).as_tool()])
     executor = ToolExecutor(registry)
     repositories = Repositories(sessions)
+    memory_store = SqlAlchemyMemoryStore(sessions)
+    memory_policy = MemoryPolicy()
+    memory_retriever = MemoryRetriever(memory_store, memory_policy)
     provider = OpenAIProvider(
         api_key=settings.openai_api_key,
         default_model=settings.openai_model,
@@ -71,6 +77,9 @@ def create_app(
             RuntimeMode.OPENAI: AgentsSdkRuntime(provider, executor),
         },
         available_tools=registry.names,
+        memory_store=memory_store,
+        memory_retriever=memory_retriever,
+        memory_policy=memory_policy,
     )
 
     @asynccontextmanager
@@ -91,7 +100,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=[origin.strip() for origin in settings.cors_origins.split(",")],
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
     app.include_router(router)
