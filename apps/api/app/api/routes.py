@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -10,13 +10,13 @@ from fastapi.responses import StreamingResponse
 
 from app.application.service import AgentService
 from app.domain.contracts import AgentCreate, AgentDefinition, AgentEvent, RunRequest, RunResult
-from app.domain.errors import EntityNotFoundError, ProviderNotConfiguredError
+from app.domain.errors import AgentStudioError, EntityNotFoundError, ProviderNotConfiguredError
 
 router = APIRouter()
 
 
 def get_service(request: Request) -> AgentService:
-    return request.app.state.agent_service
+    return cast(AgentService, request.app.state.agent_service)
 
 
 ServiceDependency = Annotated[AgentService, Depends(get_service)]
@@ -28,9 +28,7 @@ async def health() -> dict[str, str]:
 
 
 @router.post("/agents", response_model=AgentDefinition, status_code=status.HTTP_201_CREATED)
-async def create_agent(
-    payload: AgentCreate, service: ServiceDependency
-) -> AgentDefinition:
+async def create_agent(payload: AgentCreate, service: ServiceDependency) -> AgentDefinition:
     try:
         return await service.create_agent(payload)
     except ValueError as exc:
@@ -43,9 +41,7 @@ async def list_agents(service: ServiceDependency) -> list[AgentDefinition]:
 
 
 @router.get("/agents/{agent_id}", response_model=AgentDefinition)
-async def get_agent(
-    agent_id: UUID, service: ServiceDependency
-) -> AgentDefinition:
+async def get_agent(agent_id: UUID, service: ServiceDependency) -> AgentDefinition:
     try:
         return await service.get_agent(agent_id)
     except EntityNotFoundError as exc:
@@ -76,10 +72,22 @@ async def get_run(run_id: UUID, service: ServiceDependency) -> RunResult:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post(
+    "/runs/{run_id}/cancel",
+    response_model=RunResult,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def cancel_run(run_id: UUID, service: ServiceDependency) -> RunResult:
+    try:
+        return await service.cancel_run(run_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AgentStudioError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/runs/{run_id}/events", response_model=list[AgentEvent])
-async def list_events(
-    run_id: UUID, service: ServiceDependency
-) -> list[AgentEvent]:
+async def list_events(run_id: UUID, service: ServiceDependency) -> list[AgentEvent]:
     try:
         return await service.list_events(run_id)
     except EntityNotFoundError as exc:

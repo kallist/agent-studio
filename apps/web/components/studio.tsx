@@ -49,7 +49,11 @@ export function Studio() {
         if (current.some((item) => item.event_id === event.event_id)) return current;
         return [...current, event].sort((a, b) => a.sequence - b.sequence);
       });
-      if (event.type === "run.completed" || event.type === "run.failed") {
+      if (
+        event.type === "run.completed" ||
+        event.type === "run.failed" ||
+        event.type === "run.cancelled"
+      ) {
         source.close();
         void api.getRun(runId).then(setRun).catch((reason: unknown) => {
           setError(reason instanceof Error ? reason.message : "无法刷新 run 状态。");
@@ -64,7 +68,11 @@ export function Studio() {
         .then(([latestRun, latestEvents]) => {
           setRun(latestRun);
           setEvents(latestEvents);
-          if (latestRun.status !== "completed" && latestRun.status !== "failed") {
+          if (
+            latestRun.status !== "completed" &&
+            latestRun.status !== "failed" &&
+            latestRun.status !== "cancelled"
+          ) {
             setError("实时事件连接中断。已保留收到的 trace，请重试运行。");
           }
         })
@@ -287,6 +295,7 @@ export function Studio() {
                       {run.status === "completed" && <p className="answer">{run.output}</p>}
                       {(run.status === "pending" || run.status === "running") && <p className="working">Running through {selected.runtime_mode} runtime…</p>}
                       {run.status === "failed" && <p className="run-error">{run.error}</p>}
+                      {run.status === "cancelled" && <p className="run-error">{run.error}</p>}
                     </div>
                   </>
                 ) : (

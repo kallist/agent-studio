@@ -71,12 +71,35 @@ Agent Studio will own:
 
 The Agents SDK will initially own inside the adapter:
 
-- the model/tool loop;
-- SDK tool invocation integration;
+- the model invocation and structured-output decoding used by each bounded runtime step;
 - handoff/orchestration primitives when a demonstrated use case requires them;
 - streaming and resumable SDK run state;
 - guardrail/approval mechanics;
 - provider trace correlation and SDK diagnostics.
+
+## Runtime hardening refinement (2026-08-13)
+
+The first vertical slice exposed a reproducible policy gap: the SDK-managed loop did not expose
+application-owned `AgentState`, bounded `AgentStep` persistence, cross-provider duplicate-call
+protection, or a shared cancellation path for the Mock and OpenAI runtimes. Those controls are core
+Agent Studio product behavior, not provider behavior.
+
+The hybrid decision remains accepted. The implementation boundary is refined as follows:
+
+- `AgentLoop`, inside the runtime adapter layer, owns the outer `max_steps` loop, total timeout,
+  cancellation, context budget, typed decision validation, tool policy, and normalized step events.
+- `AgentsSdkRuntime` remains the only Agents SDK adapter. It asks the SDK for one typed
+  `AgentDecision` per application step with `max_turns=1`; SDK types still do not cross the runtime
+  boundary.
+- `ToolRegistry` and `ToolExecutor` remain application-owned and enforce schemas, permissions,
+  timeouts, output limits, and structured failures.
+- `MockRuntime` and `AgentsSdkRuntime` share the same `AgentLoop`, so deterministic tests cover the
+  production state machine rather than a separate rule-only path.
+
+This refinement does not replace the hybrid architecture with a provider-wide custom runtime. It
+moves only product policy and observable state to the application-owned outer loop; the Agents SDK
+continues to own OpenAI model invocation, typed output integration, provider tracing, and SDK error
+normalization inside its adapter.
 
 ## Consequences
 

@@ -2,14 +2,18 @@ export type RuntimeMode = "mock" | "openai";
 export type RunStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type EventType =
   | "run.started"
+  | "step.started"
   | "llm.started"
+  | "llm.retrying"
   | "llm.completed"
   | "tool.selected"
   | "tool.started"
   | "tool.completed"
   | "tool.failed"
+  | "step.completed"
   | "run.completed"
-  | "run.failed";
+  | "run.failed"
+  | "run.cancelled";
 
 export interface AgentDefinition {
   id: string;
@@ -81,12 +85,16 @@ export const api = {
 
 export const eventTypes: EventType[] = [
   "run.started",
+  "step.started",
   "llm.started",
+  "llm.retrying",
   "llm.completed",
   "tool.selected",
   "tool.started",
   "tool.completed",
   "tool.failed",
+  "step.completed",
   "run.completed",
   "run.failed",
+  "run.cancelled",
 ];

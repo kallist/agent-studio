@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from uuid import UUID
 
@@ -9,14 +10,18 @@ from app.domain.contracts import (
     AgentDefinition,
     AgentEvent,
     AgentRuntime,
+    CancellationToken,
     RunRequest,
     RunResult,
     RunStatus,
     RuntimeInput,
     RuntimeMode,
+    TerminationReason,
 )
 from app.domain.errors import AgentStudioError, ProviderNotConfiguredError
 from app.persistence.repositories import Repositories
+
+logger = logging.getLogger(__name__)
 
 
 class EventBroker:
@@ -52,7 +57,8 @@ class AgentService:
         self._runtimes = runtimes
         self._available_tools = available_tools
         self._broker = EventBroker()
-        self._tasks: set[asyncio.Task[None]] = set()
+        self._tasks: dict[UUID, asyncio.Task[None]] = {}
+        self._cancellations: dict[UUID, CancellationToken] = {}
 
     async def create_agent(self, request: AgentCreate) -> AgentDefinition:
         unknown = set(request.tools) - self._available_tools
@@ -73,12 +79,34 @@ class AgentService:
         if not runtime.is_configured:
             raise ProviderNotConfiguredError("OpenAI provider is not configured.")
         run = await self._repositories.create_run(agent_id, request.input)
-        task = asyncio.create_task(self._execute(run, agent, runtime))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        cancellation = CancellationToken()
+        self._cancellations[run.id] = cancellation
+        task = asyncio.create_task(self._execute(run, agent, runtime, cancellation))
+        self._tasks[run.id] = task
+
+        def cleanup(completed: asyncio.Task[None]) -> None:
+            self._cleanup(run.id, completed)
+
+        task.add_done_callback(cleanup)
         return run
 
-    async def _execute(self, run: RunResult, agent: AgentDefinition, runtime: AgentRuntime) -> None:
+    def _cleanup(self, run_id: UUID, task: asyncio.Task[None]) -> None:
+        self._tasks.pop(run_id, None)
+        self._cancellations.pop(run_id, None)
+        if not task.cancelled() and task.exception() is not None:
+            logger.error(
+                "Agent run task escaped its error boundary.",
+                exc_info=task.exception(),
+                extra={"run_id": str(run_id)},
+            )
+
+    async def _execute(
+        self,
+        run: RunResult,
+        agent: AgentDefinition,
+        runtime: AgentRuntime,
+        cancellation: CancellationToken,
+    ) -> None:
         sequence = 0
 
         async def emit(event: AgentEvent) -> None:
@@ -118,7 +146,9 @@ class AgentService:
         )
         try:
             output = await runtime.run(
-                RuntimeInput(run_id=run.id, agent=agent, user_input=run.input), emit
+                RuntimeInput(run_id=run.id, agent=agent, user_input=run.input),
+                emit,
+                cancellation,
             )
         except AgentStudioError as exc:
             message = str(exc)
@@ -133,6 +163,7 @@ class AgentService:
                 error=message,
             )
         except Exception:
+            logger.exception("Unexpected agent runtime failure.", extra={"run_id": str(run.id)})
             message = "Agent runtime failed unexpectedly."
             await finish(
                 RunStatus.FAILED,
@@ -145,16 +176,59 @@ class AgentService:
                 error=message,
             )
         else:
+            terminal_payload = {
+                "termination_reason": output.termination_reason.value,
+                "steps": len(output.steps),
+            }
+            if output.termination_reason == TerminationReason.COMPLETED:
+                final_output = output.final_output or ""
+                terminal_payload["final_output"] = final_output
+                await finish(
+                    RunStatus.COMPLETED,
+                    AgentEvent(
+                        run_id=run.id,
+                        sequence=0,
+                        type="run.completed",
+                        payload=terminal_payload,
+                    ),
+                    output=final_output,
+                )
+                return
+            if output.termination_reason == TerminationReason.CANCELLED:
+                terminal_payload["error"] = output.error or "Agent run was cancelled."
+                await finish(
+                    RunStatus.CANCELLED,
+                    AgentEvent(
+                        run_id=run.id,
+                        sequence=0,
+                        type="run.cancelled",
+                        payload=terminal_payload,
+                    ),
+                    error=output.error,
+                )
+                return
+            message = output.error or f"Agent terminated: {output.termination_reason.value}."
+            terminal_payload["error"] = message
             await finish(
-                RunStatus.COMPLETED,
+                RunStatus.FAILED,
                 AgentEvent(
                     run_id=run.id,
                     sequence=0,
-                    type="run.completed",
-                    payload={"final_output": output.final_output},
+                    type="run.failed",
+                    payload=terminal_payload,
                 ),
-                output=output.final_output,
+                error=message,
             )
+
+    async def cancel_run(self, run_id: UUID) -> RunResult:
+        run = await self._repositories.get_run(run_id)
+        if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}:
+            return run
+        cancellation = self._cancellations.get(run_id)
+        if cancellation is None:
+            raise AgentStudioError("Run is not active in this process and cannot be cancelled.")
+        cancellation.cancel()
+        return run
 
     async def get_run(self, run_id: UUID) -> RunResult:
         return await self._repositories.get_run(run_id)
@@ -182,7 +256,7 @@ class AgentService:
                     continue
                 cursor = event.sequence
                 yield event
-                if event.type in {"run.completed", "run.failed"}:
+                if event.type in {"run.completed", "run.failed", "run.cancelled"}:
                     return
         finally:
             self._broker.unsubscribe(run_id, queue)

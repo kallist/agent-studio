@@ -108,11 +108,18 @@ Persists run identity, agent version, status, timestamps, input/output reference
 
 1. The frontend creates a run through FastAPI.
 2. `AgentService` validates access, loads a versioned agent definition, and creates a pending run through `RunRepository`.
-3. `AgentRuntime` starts the run with an `LLMProvider`, registered tools, and relevant memory/knowledge context.
-4. Runtime callbacks are normalized into application `RuntimeEvent` values and written through `TraceStore`.
-5. `ToolExecutor` validates and executes tool calls resolved by `ToolRegistry`; results return to the runtime.
-6. Terminal output or failure is persisted, then exposed to the frontend through run and trace APIs.
-7. Evaluation reads immutable run/trace data; it does not mutate the original run.
+3. `AgentRuntime` starts a bounded application-owned `AgentLoop` with an `LLMProvider`, registered
+   tools, explicit limits, and a cancellation token.
+4. For each step, the loop builds a size-bounded `AgentContext`, asks the provider for one typed
+   `AgentDecision`, validates the selected tool and duplicate-call policy, and either terminates or
+   invokes `ToolExecutor`.
+5. `ToolExecutor` validates input, permissions, timeout, output schema, and output size. Its
+   `ToolResult` becomes the next step's observation.
+6. Step/model/tool callbacks are normalized into application `AgentEvent` values and persisted
+   before being published to the live event stream.
+7. A typed `TerminationReason` maps to completed, failed, or cancelled run status and is committed
+   atomically with the terminal event.
+8. Evaluation reads immutable run/trace data; it does not mutate the original run.
 
 ## Data architecture
 

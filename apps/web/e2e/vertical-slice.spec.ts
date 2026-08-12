@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("creates a mock calculator agent and persists its observable run", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(process.env.AGENT_STUDIO_E2E_BASE_URL ?? "/");
   await expect(page.getByRole("heading", { name: "Build agents you can actually inspect." })).toBeVisible();
 
   await page.getByRole("button", { name: "创建 Agent" }).click();

@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 
 class RuntimeMode(StrEnum):
@@ -22,16 +22,49 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class AgentPhase(StrEnum):
+    CREATED = "created"
+    RUNNING = "running"
+    WAITING_FOR_MODEL = "waiting_for_model"
+    EXECUTING_TOOL = "executing_tool"
+    TERMINATED = "terminated"
+
+
+class AgentState(BaseModel):
+    phase: AgentPhase
+    current_step: int = Field(default=0, ge=0)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class TerminationReason(StrEnum):
+    COMPLETED = "completed"
+    MAX_STEPS = "max_steps"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    PROVIDER_ERROR = "provider_error"
+    TOOL_ERROR = "tool_error"
+    INVALID_OUTPUT = "invalid_output"
+
+
+class ToolResultStatus(StrEnum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 EventType = Literal[
     "run.started",
+    "step.started",
     "llm.started",
+    "llm.retrying",
     "llm.completed",
     "tool.selected",
     "tool.started",
     "tool.completed",
     "tool.failed",
+    "step.completed",
     "run.completed",
     "run.failed",
+    "run.cancelled",
 ]
 
 
@@ -83,25 +116,122 @@ class AgentEvent(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class ToolSpec(BaseModel):
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    output_schema: dict[str, Any]
+    timeout_seconds: float
+    permissions: list[str]
+
+
+class ToolCall(BaseModel):
+    call_id: UUID = Field(default_factory=uuid4)
+    name: str = Field(min_length=1, max_length=120)
+    arguments: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class ToolResult(BaseModel):
+    call_id: UUID
+    tool_name: str
+    status: ToolResultStatus
+    output: dict[str, JsonValue] | None = None
+    error: str | None = None
+    latency_ms: float = Field(ge=0)
+
+
+class AgentDecision(BaseModel):
+    action: Literal["final", "tool"]
+    final_output: str | None = Field(default=None, max_length=20_000)
+    tool_call: ToolCall | None = None
+
+    @model_validator(mode="after")
+    def validate_action_payload(self) -> AgentDecision:
+        if self.action == "final":
+            if self.final_output is None or self.tool_call is not None:
+                raise ValueError("A final decision requires only final_output.")
+        elif self.tool_call is None or self.final_output is not None:
+            raise ValueError("A tool decision requires only tool_call.")
+        return self
+
+
+class AgentStep(BaseModel):
+    index: int = Field(ge=1)
+    decision: AgentDecision
+    tool_result: ToolResult | None = None
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AgentContext(BaseModel):
+    instructions: str
+    user_input: str
+    tools: list[ToolSpec]
+    steps: list[AgentStep]
+    omitted_steps: int = Field(default=0, ge=0)
+
+
+class RuntimeLimits(BaseModel):
+    max_steps: int = Field(default=8, ge=1, le=50)
+    timeout_seconds: float = Field(default=30.0, gt=0, le=600)
+    invalid_output_retries: int = Field(default=1, ge=0, le=3)
+    max_context_chars: int = Field(default=32_000, ge=2_000, le=200_000)
+    max_decision_chars: int = Field(default=8_000, ge=500, le=50_000)
+    max_calls_per_tool: int = Field(default=3, ge=1, le=20)
+
+
 class RuntimeInput(BaseModel):
     run_id: UUID
     agent: AgentDefinition
     user_input: str
+    granted_permissions: set[str] = Field(default_factory=lambda: {"compute"})
+    limits: RuntimeLimits = Field(default_factory=RuntimeLimits)
 
 
-class RuntimeOutput(BaseModel):
-    final_output: str
+class AgentRun(BaseModel):
+    run_id: UUID
+    state: AgentState
+    steps: list[AgentStep]
+    termination_reason: TerminationReason
+    final_output: str | None = None
+    error: str | None = None
+    started_at: datetime
+    completed_at: datetime
 
 
 class EventSink(Protocol):
     async def __call__(self, event: AgentEvent) -> None: ...
 
 
+class CancellationToken:
+    """Cooperative cancellation signal shared by the service and runtime."""
+
+    def __init__(self) -> None:
+        import asyncio
+
+        self._event = asyncio.Event()
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    async def wait(self) -> None:
+        await self._event.wait()
+
+
 class AgentRuntime(Protocol):
     @property
     def is_configured(self) -> bool: ...
 
-    async def run(self, runtime_input: RuntimeInput, emit: EventSink) -> RuntimeOutput: ...
+    async def run(
+        self,
+        runtime_input: RuntimeInput,
+        emit: EventSink,
+        cancellation: CancellationToken | None = None,
+    ) -> AgentRun: ...
 
 
 class EventStream(Protocol):

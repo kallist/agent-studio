@@ -2,19 +2,24 @@ import type { AgentEvent } from "@/lib/api";
 
 const labels: Record<AgentEvent["type"], string> = {
   "run.started": "Run started",
+  "step.started": "Step started",
   "llm.started": "Runtime thinking",
+  "llm.retrying": "Retrying invalid output",
   "llm.completed": "Runtime complete",
   "tool.selected": "Tool selected",
   "tool.started": "Tool input",
   "tool.completed": "Tool result",
   "tool.failed": "Tool failed",
+  "step.completed": "Step complete",
   "run.completed": "Final answer",
   "run.failed": "Run failed",
+  "run.cancelled": "Run cancelled",
 };
 
 function detail(event: AgentEvent): string {
   const payload = event.payload;
   if (typeof payload.result === "string") return payload.result;
+  if (payload.result && typeof payload.result === "object") return JSON.stringify(payload.result);
   if (typeof payload.final_output === "string") return payload.final_output;
   if (typeof payload.error === "string") return payload.error;
   if (typeof payload.summary === "string") return payload.summary;
