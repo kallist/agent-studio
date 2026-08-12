@@ -48,6 +48,7 @@ screenshots/
 
 # Logs and temporary files
 *.log
+*.tsbuildinfo
 logs/
 tmp/
 temp/

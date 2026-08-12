@@ -1,0 +1,51 @@
+[project]
+name = "agent-studio-api"
+version = "0.1.0"
+description = "Agent Studio FastAPI backend"
+requires-python = ">=3.12"
+dependencies = [
+  "aiosqlite==0.22.1",
+  "asyncpg==0.31.0",
+  "fastapi==0.135.1",
+  "openai-agents==0.20.0",
+  "pydantic-settings==2.13.1",
+  "sqlalchemy==2.0.48",
+  "uvicorn[standard]==0.42.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx==0.28.1",
+  "mypy==1.19.1",
+  "pytest==9.0.2",
+  "pytest-asyncio==1.3.0",
+  "ruff==0.15.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["tests"]
+
+[[tool.mypy.overrides]]
+module = ["agents", "agents.*"]
+ignore_missing_imports = true
