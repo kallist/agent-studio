@@ -18,8 +18,7 @@ test("navigates Studio, builds a calculator agent, and inspects its persisted tr
   await expect(page.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Agent Builder", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Agent Builder" })).toBeVisible();
-  await expect(page.getByText("Available after the Durable Memory feature merges")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Unavailable" })).toBeDisabled();
+  await expect(page.getByLabel("Enable Durable Memory")).toBeChecked();
   await expect(page.getByLabel("Max iterations")).toBeDisabled();
 
   await page.locator(".builder-form").getByRole("textbox", { name: /^Name/ }).fill(name);
@@ -48,7 +47,12 @@ test("navigates Studio, builds a calculator agent, and inspects its persisted tr
   await page.getByRole("button", { name: "Back to Playground" }).click();
   await page.getByRole("button", { name: "Clear", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Clear this conversation?" })).toBeVisible();
-  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Clear conversation" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Clear this conversation?" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Clear", exact: true })).toBeFocused();
   await expect(page.getByText("5192", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "Dashboard", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Recent runs" })).toBeVisible();
@@ -96,6 +100,43 @@ test("ingests knowledge, binds it to an agent, and preserves cited run metadata"
   await expect(page.locator(".execution-timeline").getByText(/upload:\/\/security_policy\.txt/).first()).toBeVisible();
 });
 
+test("combines durable memory with knowledge search across deterministic runs", async ({ page }) => {
+  const suffix = Date.now();
+  const baseName = `Memory RAG ${suffix}`;
+  await page.goto("/?view=builder");
+  await page.getByLabel("Knowledge base name").fill(baseName);
+  await page.getByLabel("Description").fill("Memory and retrieval integration evidence");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByRole("button", { name: new RegExp(baseName) })).toBeVisible();
+  await page.locator('input[type="file"]').setInputFiles(path.resolve(process.cwd(), "../../tests/fixtures/rag/security_policy.txt"));
+  await page.getByRole("button", { name: "Upload & ingest" }).click();
+  await expect(page.getByText("completed", { exact: true })).toBeVisible();
+
+  await page.getByRole("checkbox", { name: new RegExp(baseName) }).check();
+  await expect(page.getByLabel("Enable Durable Memory")).toBeChecked();
+  await page.locator(".builder-form").getByRole("textbox", { name: /^Name/ }).fill(`Memory Knowledge Agent ${suffix}`);
+  await page.locator(".builder-form").getByRole("textbox", { name: /^Prompt/ }).fill("Use relevant durable memory and attached knowledge.");
+  await page.getByRole("button", { name: "Save agent" }).click();
+
+  await page.getByLabel("Message").fill("Remember that project codename is Atlas.");
+  await page.getByRole("button", { name: "Run agent" }).click();
+  await expect(page.getByText("Memory written", { exact: true })).toBeVisible();
+  await expect(page.getByText("Knowledge", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("project codename is Atlas", { exact: true })).toBeVisible();
+
+  await page.getByLabel("Message").fill("Remember that project codename is Atlas and parser failures must be isolated.");
+  await page.getByRole("button", { name: "Run agent" }).click();
+  await expect(page.getByText("Memory retrieved", { exact: true })).toBeVisible();
+  const citation = page.locator(".trace-citations").getByText(/security_policy\.txt · score/).first();
+  await expect(citation).toBeVisible();
+  await citation.click();
+  await expect(page.locator(".trace-citations").getByText(/upload:\/\/security_policy\.txt/).first()).toBeVisible();
+  await page.getByRole("button", { name: /Delete memory: project codename is Atlas/ }).click();
+  await expect(page.getByText("Memory deleted", { exact: true })).toBeVisible();
+  await page.getByRole("checkbox", { name: /On|Off/ }).uncheck();
+  await expect(page.getByText("Memory disabled", { exact: true })).toBeVisible();
+});
+
 test("shows a real provider configuration error", async ({ page }) => {
   await page.goto("/?view=builder");
   await page.locator(".builder-form").getByRole("textbox", { name: /^Name/ }).fill(`OpenAI Error State ${Date.now()}`);
@@ -117,4 +158,21 @@ test("keeps all primary views within a 390 by 844 viewport", async ({ page }) =>
     if (view === "Agent Builder") await expect(page.getByLabel("Live agent preview")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   }
+  await page.getByRole("button", { name: "Agent Builder", exact: true }).click();
+  await page.locator(".builder-form").getByRole("textbox", { name: /^Name/ }).fill(`Mobile Trace ${Date.now()}`);
+  await page.getByRole("button", { name: "Save agent" }).click();
+  await page.getByLabel("Message").fill("Remember that mobile validation is complete.");
+  await page.getByRole("button", { name: "Run agent" }).click();
+  await expect(page.getByText("Memory written", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Run detail", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Execution timeline" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Memory Written" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test("reports a real API offline state", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort());
+  await page.goto("/");
+  await expect(page.getByText("API offline", { exact: true }).first()).toBeVisible();
+  await expect(page.locator(".error-banner")).toContainText("Cannot connect to the Agent Studio API");
 });

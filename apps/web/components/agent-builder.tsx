@@ -13,6 +13,7 @@ interface BuilderDraft {
   model: string;
   calculator: boolean;
   knowledgeBaseIds: string[];
+  memoryEnabled: boolean;
 }
 
 const initialDraft: BuilderDraft = {
@@ -22,6 +23,7 @@ const initialDraft: BuilderDraft = {
   model: "",
   calculator: true,
   knowledgeBaseIds: [],
+  memoryEnabled: true,
 };
 
 interface AgentBuilderProps {
@@ -37,6 +39,7 @@ interface AgentBuilderProps {
     model: string | null;
     tools: string[];
     knowledge_base_ids: string[];
+    memory_enabled: boolean;
   }) => Promise<AgentDefinition | null>;
 }
 
@@ -64,6 +67,7 @@ export function AgentBuilder({ saving, knowledgeBases, knowledgeLoading, knowled
       model: draft.runtime === "openai" ? draft.model.trim() : null,
       tools,
       knowledge_base_ids: draft.knowledgeBaseIds,
+      memory_enabled: draft.memoryEnabled,
     });
     if (created) setDraft(initialDraft);
   }
@@ -89,7 +93,7 @@ export function AgentBuilder({ saving, knowledgeBases, knowledgeLoading, knowled
               <div className="capability-row"><span className="capability-icon"><Icon name="knowledge" /></span><span><strong id="knowledge-binding-title">Knowledge</strong><small>Bind real Knowledge Bases to enable knowledge_search</small></span><StatusBadge status={knowledgeEnabled ? "ready" : "idle"} /></div>
               {knowledgeLoading ? <LoadingSkeleton rows={2} /> : knowledgeError ? <div className="inline-error" role="alert"><Icon name="error" /><span>{knowledgeError}</span><Button type="button" variant="secondary" icon="refresh" onClick={onReloadKnowledge}>Retry</Button></div> : knowledgeBases.length === 0 ? <div className="builder-empty-state"><Icon name="knowledge" /><div><strong>No Knowledge Bases available</strong><p>Create and ingest one in Knowledge / RAG below, then bind it here.</p></div></div> : <div className="knowledge-binding-list">{knowledgeBases.map((base) => <label key={base.id}><input type="checkbox" checked={draft.knowledgeBaseIds.includes(base.id)} onChange={(event) => toggleKnowledge(base.id, event.target.checked)} disabled={saving} /><span><strong>{base.name}</strong><small>{base.document_count} document{base.document_count === 1 ? "" : "s"} · {base.embedding_model}</small></span></label>)}</div>}
             </section>
-            <div className="capability-row unavailable" aria-disabled="true"><span className="capability-icon"><Icon name="memory" /></span><span><strong>Memory</strong><small>Available after the Durable Memory feature merges</small></span><button type="button" disabled>Unavailable</button></div>
+            <label className="capability-row"><span className="capability-icon"><Icon name="memory" /></span><span><strong>Durable Memory</strong><small>Retrieve and save agent-scoped facts across successful runs</small></span><input aria-label="Enable Durable Memory" className="switch" type="checkbox" checked={draft.memoryEnabled} onChange={(event) => set("memoryEnabled", event.target.checked)} disabled={saving} /></label>
           </div>
 
           <div className="builder-section-heading"><span>04</span><div><h2>Limits</h2><p>The current Agent API does not expose editable runtime limits.</p></div></div>
@@ -104,7 +108,7 @@ export function AgentBuilder({ saving, knowledgeBases, knowledgeLoading, knowled
               <div className="preview-card-top"><span className="agent-avatar large"><Icon name="spark" /></span><StatusBadge status={draft.runtime === "mock" ? "ready" : "needs-key"} /></div>
               <p className="preview-label">Agent definition</p><h2>{draft.name || "Untitled agent"}</h2><p className="preview-prompt">{draft.prompt || "Your agent prompt will appear here."}</p>
               <div className="preview-divider" />
-              <dl className="preview-details"><div><dt><Icon name="model" />Runtime</dt><dd>{draft.runtime === "mock" ? "Deterministic mock" : draft.model || "Model not set"}</dd></div><div><dt><Icon name="tool" />Tools</dt><dd><span className="tool-chip-row">{draft.calculator && <span className="tool-chip"><Icon name="calculator" />calculator</span>}{knowledgeEnabled && <span className="tool-chip"><Icon name="knowledge" />knowledge_search</span>}{!draft.calculator && !knowledgeEnabled && "No tools"}</span></dd></div><div><dt><Icon name="knowledge" />Knowledge</dt><dd>{knowledgeEnabled ? `${draft.knowledgeBaseIds.length} base${draft.knowledgeBaseIds.length === 1 ? "" : "s"} bound` : "Not bound"}</dd></div><div><dt><Icon name="memory" />Memory</dt><dd>Unavailable</dd></div></dl>
+              <dl className="preview-details"><div><dt><Icon name="model" />Runtime</dt><dd>{draft.runtime === "mock" ? "Deterministic mock" : draft.model || "Model not set"}</dd></div><div><dt><Icon name="tool" />Tools</dt><dd><span className="tool-chip-row">{draft.calculator && <span className="tool-chip"><Icon name="calculator" />calculator</span>}{knowledgeEnabled && <span className="tool-chip"><Icon name="knowledge" />knowledge_search</span>}{!draft.calculator && !knowledgeEnabled && "No tools"}</span></dd></div><div><dt><Icon name="knowledge" />Knowledge</dt><dd>{knowledgeEnabled ? `${draft.knowledgeBaseIds.length} base${draft.knowledgeBaseIds.length === 1 ? "" : "s"} bound` : "Not bound"}</dd></div><div><dt><Icon name="memory" />Memory</dt><dd>{draft.memoryEnabled ? "Enabled" : "Disabled"}</dd></div></dl>
               <Button className="preview-run" icon="play" disabled>Run after saving</Button>
             </article>
             <div className="preview-note"><Icon name="info" /><p><strong>Preview only</strong><br />Saving creates a real backend definition. Unsupported capabilities stay disabled.</p></div>

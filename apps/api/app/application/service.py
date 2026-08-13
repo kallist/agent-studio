@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from uuid import UUID
 
 from app.domain.contracts import (
@@ -18,7 +19,16 @@ from app.domain.contracts import (
     RuntimeMode,
     TerminationReason,
 )
-from app.domain.errors import AgentStudioError, ProviderNotConfiguredError
+from app.domain.errors import AgentStudioError, EntityNotFoundError, ProviderNotConfiguredError
+from app.memory.contracts import (
+    MemoryKind,
+    MemoryRecord,
+    MemorySettings,
+    MemoryStore,
+    RuntimeMemory,
+)
+from app.memory.policy import MemoryPolicy
+from app.memory.retriever import MemoryRetriever
 from app.persistence.repositories import Repositories
 
 logger = logging.getLogger(__name__)
@@ -52,10 +62,16 @@ class AgentService:
         repositories: Repositories,
         runtimes: dict[RuntimeMode, AgentRuntime],
         available_tools: set[str],
+        memory_store: MemoryStore,
+        memory_retriever: MemoryRetriever,
+        memory_policy: MemoryPolicy,
     ) -> None:
         self._repositories = repositories
         self._runtimes = runtimes
         self._available_tools = available_tools
+        self._memory_store = memory_store
+        self._memory_retriever = memory_retriever
+        self._memory_policy = memory_policy
         self._broker = EventBroker()
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
         self._cancellations: dict[UUID, CancellationToken] = {}
@@ -78,6 +94,19 @@ class AgentService:
 
     async def get_agent(self, agent_id: UUID) -> AgentDefinition:
         return await self._repositories.get_agent(agent_id)
+
+    async def set_memory_enabled(self, agent_id: UUID, enabled: bool) -> MemorySettings:
+        return await self._repositories.set_memory_enabled(agent_id, enabled)
+
+    async def list_memories(self, agent_id: UUID) -> list[MemoryRecord]:
+        await self._repositories.get_agent(agent_id)
+        return await self._memory_store.list(agent_id)
+
+    async def delete_memory(self, agent_id: UUID, memory_id: UUID) -> None:
+        await self._repositories.get_agent(agent_id)
+        deleted = await self._memory_store.delete(agent_id, memory_id)
+        if not deleted:
+            raise EntityNotFoundError(f"Memory '{memory_id}' was not found for this agent.")
 
     async def create_run(self, agent_id: UUID, request: RunRequest) -> RunResult:
         agent = await self._repositories.get_agent(agent_id)
@@ -154,12 +183,52 @@ class AgentService:
             granted_permissions = {"compute"}
             if "knowledge_search" in agent.tools and agent.knowledge_base_ids:
                 granted_permissions.add("knowledge:read")
+            timestamp = datetime.now(UTC)
+            runtime_memory = RuntimeMemory(
+                conversation=[
+                    MemoryRecord(
+                        agent_id=agent.id,
+                        kind=MemoryKind.CONVERSATION,
+                        content=run.input,
+                        importance=0,
+                        source_run_id=run.id,
+                        created_at=timestamp,
+                        metadata={"role": "user"},
+                    )
+                ]
+            )
+            if agent.memory_enabled:
+                runtime_memory.long_term = await self._memory_retriever.retrieve(
+                    agent.id, run.input
+                )
+                if runtime_memory.long_term:
+                    await emit(
+                        AgentEvent(
+                            run_id=run.id,
+                            sequence=0,
+                            type="memory.retrieved",
+                            payload={
+                                "count": len(runtime_memory.long_term),
+                                "matches": [
+                                    {
+                                        "memory_id": str(match.record.id),
+                                        "score": match.score,
+                                        "relevance": match.relevance,
+                                        "recency": match.recency,
+                                        "importance": match.importance,
+                                    }
+                                    for match in runtime_memory.long_term
+                                ],
+                            },
+                        )
+                    )
             output = await runtime.run(
                 RuntimeInput(
                     run_id=run.id,
                     agent=agent,
                     user_input=run.input,
                     granted_permissions=granted_permissions,
+                    memory=runtime_memory,
                 ),
                 emit,
                 cancellation,
@@ -197,6 +266,48 @@ class AgentService:
             if output.termination_reason == TerminationReason.COMPLETED:
                 final_output = output.final_output or ""
                 terminal_payload["final_output"] = final_output
+                candidate = self._memory_policy.propose_write(
+                    agent_id=agent.id,
+                    run_id=run.id,
+                    user_input=run.input,
+                )
+                if candidate is not None:
+                    try:
+                        committed_events = (
+                            await self._repositories.finish_completed_run_with_memory(
+                                run.id,
+                                agent.id,
+                                AgentEvent(
+                                    run_id=run.id,
+                                    sequence=sequence + 1,
+                                    type="run.completed",
+                                    payload=terminal_payload,
+                                ),
+                                output=final_output,
+                                candidate=candidate,
+                            )
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Atomic memory/run completion failed.",
+                            extra={"run_id": str(run.id)},
+                        )
+                        message = "Run completion could not be persisted."
+                        await finish(
+                            RunStatus.FAILED,
+                            AgentEvent(
+                                run_id=run.id,
+                                sequence=0,
+                                type="run.failed",
+                                payload={"error": message},
+                            ),
+                            error=message,
+                        )
+                        return
+                    sequence = committed_events[-1].sequence
+                    for committed_event in committed_events:
+                        await self._broker.publish(committed_event)
+                    return
                 await finish(
                     RunStatus.COMPLETED,
                     AgentEvent(

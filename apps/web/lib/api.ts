@@ -11,6 +11,8 @@ export type KnownEventType =
   | "tool.completed"
   | "tool.failed"
   | "step.completed"
+  | "memory.retrieved"
+  | "memory.written"
   | "run.completed"
   | "run.failed"
   | "run.cancelled";
@@ -24,7 +26,20 @@ export interface AgentDefinition {
   model: string | null;
   tools: string[];
   knowledge_base_ids: string[];
+  memory_enabled: boolean;
   created_at: string;
+}
+
+export interface MemoryRecord {
+  id: string;
+  agent_id: string;
+  kind: "conversation" | "working" | "long_term";
+  content: string;
+  importance: number;
+  source_run_id: string | null;
+  created_at: string;
+  expires_at: string | null;
+  metadata: Record<string, unknown>;
 }
 
 export interface RunResult {
@@ -49,6 +64,23 @@ export interface AgentEvent {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 
+export type ApiConnectionStatus = "checking" | "connected" | "offline";
+
+let connectionStatus: ApiConnectionStatus = "checking";
+const connectionListeners = new Set<(status: ApiConnectionStatus) => void>();
+
+export function reportApiConnection(status: ApiConnectionStatus): void {
+  if (connectionStatus === status) return;
+  connectionStatus = status;
+  connectionListeners.forEach((listener) => listener(status));
+}
+
+export function subscribeApiConnection(listener: (status: ApiConnectionStatus) => void): () => void {
+  listener(connectionStatus);
+  connectionListeners.add(listener);
+  return () => connectionListeners.delete(listener);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -60,16 +92,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     });
   } catch {
+    reportApiConnection("offline");
     throw new Error("Cannot connect to the Agent Studio API. Confirm that the backend is running on port 8000.");
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { detail?: string } | null;
+    reportApiConnection(body?.detail || response.status < 500 ? "connected" : "offline");
     throw new Error(body?.detail ?? `API request failed (${response.status}).`);
   }
+  reportApiConnection("connected");
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
 export const api = {
+  health: () => request<{ status: string }>("/health"),
   listAgents: () => request<AgentDefinition[]>("/agents"),
   createAgent: (payload: {
     name: string;
@@ -78,6 +115,7 @@ export const api = {
     model: string | null;
     tools: string[];
     knowledge_base_ids?: string[];
+    memory_enabled?: boolean;
   }) => request<AgentDefinition>("/agents", { method: "POST", body: JSON.stringify(payload) }),
   createRun: (agentId: string, input: string) =>
     request<RunResult>(`/agents/${agentId}/runs`, {
@@ -86,6 +124,15 @@ export const api = {
     }),
   getRun: (runId: string) => request<RunResult>(`/runs/${runId}`),
   listEvents: (runId: string) => request<AgentEvent[]>(`/runs/${runId}/events`),
+  listMemories: (agentId: string) =>
+    request<MemoryRecord[]>(`/agents/${agentId}/memories`),
+  setMemoryEnabled: (agentId: string, enabled: boolean) =>
+    request<{ agent_id: string; enabled: boolean }>(`/agents/${agentId}/memory-settings`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  deleteMemory: (agentId: string, memoryId: string) =>
+    request<void>(`/agents/${agentId}/memories/${memoryId}`, { method: "DELETE" }),
   streamUrl: (runId: string, afterSequence = 0) =>
     `${API_URL}/runs/${runId}/stream?after_sequence=${afterSequence}`,
   listKnowledgeBases: () => request<KnowledgeBase[]>("/knowledge-bases"),
@@ -178,6 +225,8 @@ export const eventTypes: KnownEventType[] = [
   "tool.completed",
   "tool.failed",
   "step.completed",
+  "memory.retrieved",
+  "memory.written",
   "run.completed",
   "run.failed",
   "run.cancelled",

@@ -1,0 +1,5 @@
+Customer support handbook
+
+Support agents classify tickets, reproduce reported symptoms, and link resolved incidents to troubleshooting notes. Escalations include observable steps and reproducible evidence so another responder can continue the investigation.
+
+Account recovery requires identity verification. Attachments are scanned before an operator opens them. This handbook does not describe the Agent Studio runtime, MockProvider, or the knowledge ingestion policy.

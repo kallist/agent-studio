@@ -1,6 +1,7 @@
 "use client";
 
 import { Icon, type IconName } from "@/components/icons";
+import type { ApiConnectionStatus } from "@/lib/api";
 import type { StudioView } from "@/lib/studio-types";
 
 const navigation: Array<{ id: StudioView; label: string; icon: IconName }> = [
@@ -19,7 +20,9 @@ const titles: Record<StudioView, string> = {
   run: "Execution detail",
 };
 
-export function AppShell({ view, hasRun, onNavigate, children }: { view: StudioView; hasRun: boolean; onNavigate: (view: StudioView) => void; children: React.ReactNode }) {
+const connectionLabel: Record<ApiConnectionStatus, string> = { checking: "Checking API", connected: "Connected", offline: "API offline" };
+
+export function AppShell({ view, hasRun, apiStatus, onNavigate, children }: { view: StudioView; hasRun: boolean; apiStatus: ApiConnectionStatus; onNavigate: (view: StudioView) => void; children: React.ReactNode }) {
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Skip to content</a>
@@ -42,14 +45,14 @@ export function AppShell({ view, hasRun, onNavigate, children }: { view: StudioV
           })}
         </nav>
         <div className="sidebar-footer">
-          <div className="environment-card"><span className="environment-icon"><Icon name="terminal" /></span><div><strong>Local workspace</strong><small><span /> API connected</small></div></div>
+          <div className={`environment-card connection-${apiStatus}`}><span className="environment-icon"><Icon name="terminal" /></span><div><strong>Local workspace</strong><small><span />{connectionLabel[apiStatus]}</small></div></div>
           <p>Agent Studio <span>v0.1</span></p>
         </div>
       </aside>
       <div className="workspace">
         <header className="workspace-topbar">
           <div><p>Agent Studio</p><strong>{titles[view]}</strong></div>
-          <div className="topbar-meta"><span className="connection-pill"><span /> Connected</span><button className="avatar-button" aria-label="Workspace profile">AS</button></div>
+          <div className="topbar-meta"><span className={`connection-pill connection-${apiStatus}`} aria-live="polite"><span />{connectionLabel[apiStatus]}</span><button className="avatar-button" aria-label="Workspace profile">AS</button></div>
         </header>
         <main id="main-content" className={`content content-${view}`}>{children}</main>
       </div>

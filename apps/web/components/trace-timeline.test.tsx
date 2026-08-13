@@ -52,4 +52,15 @@ describe("TraceTimeline", () => {
     expect(screen.getByText(/upload:\/\/handbook\.md/)).toBeInTheDocument();
     expect(screen.getByText(/page.*4/)).toBeInTheDocument();
   });
+
+  it("renders normalized durable memory events", () => {
+    const timestamp = new Date().toISOString();
+    render(<TraceTimeline events={[
+      { event_id: "retrieve", run_id: "run", sequence: 1, type: "memory.retrieved", timestamp, payload: { count: 1, matches: [{ memory_id: "memory-1", score: 0.88 }] } },
+      { event_id: "write", run_id: "run", sequence: 2, type: "memory.written", timestamp, payload: { memory_id: "memory-2", importance: 0.9 } },
+    ]} />);
+    expect(screen.getByText("Memory retrieved")).toBeInTheDocument();
+    expect(screen.getByText("Memory written")).toBeInTheDocument();
+    expect(screen.getAllByText("Memory")).toHaveLength(2);
+  });
 });

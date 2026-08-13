@@ -65,6 +65,11 @@ class MockProvider:
                     arguments={"query": context.user_input, "top_k": 5},
                 ),
             )
+        if context.memory.long_term:
+            return AgentDecision(
+                action="final",
+                final_output=f"I remember: {context.memory.long_term[0].record.content}",
+            )
         return AgentDecision(
             action="final",
             final_output=f"Mock response: {context.user_input.strip()}",

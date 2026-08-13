@@ -14,6 +14,8 @@ const eventMeta: Record<KnownEventType, EventMeta> = {
   "tool.completed": { label: "Tool result", category: "Tool", icon: "check" },
   "tool.failed": { label: "Tool failed", category: "Error", icon: "error" },
   "step.completed": { label: "Step completed", category: "Runtime", icon: "check" },
+  "memory.retrieved": { label: "Memory retrieved", category: "Memory", icon: "memory" },
+  "memory.written": { label: "Memory written", category: "Memory", icon: "memory" },
   "run.completed": { label: "Final answer", category: "Output", icon: "check" },
   "run.failed": { label: "Run failed", category: "Error", icon: "error" },
   "run.cancelled": { label: "Run cancelled", category: "System", icon: "close" },

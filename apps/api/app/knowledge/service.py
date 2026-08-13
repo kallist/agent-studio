@@ -15,7 +15,6 @@ from app.domain.contracts import (
     EmbeddingProvider,
     EmbeddingVector,
     IngestionJobView,
-    IngestionState,
     KnowledgeBaseCreate,
     KnowledgeBaseView,
     KnowledgeSearchRequest,
@@ -27,7 +26,7 @@ from app.domain.contracts import (
 from app.domain.errors import DocumentParsingError, KnowledgeValidationError
 from app.knowledge.chunking import TextChunker
 from app.knowledge.parsers import parser_for
-from app.knowledge.repository import KnowledgeRepository
+from app.knowledge.repository import KnowledgeRepository, StoredChunk
 
 _ALLOWED_TYPES: dict[str, tuple[str, set[str]]] = {
     ".txt": ("text/plain", {"text/plain", "application/octet-stream"}),
@@ -105,9 +104,7 @@ class KnowledgeService:
             storage_path.unlink(missing_ok=True)
             raise
         if self._enqueue is None:
-            await self._repository.finish_job(
-                job.id, IngestionState.FAILED, "Ingestion worker is not available."
-            )
+            await self._repository.fail_job(job.id, "Ingestion worker is not available.")
         else:
             self._enqueue(job.id)
         return DocumentUploadAccepted(document=document, ingestion_job=job)
@@ -116,8 +113,11 @@ class KnowledgeService:
         return await self._repository.recover_jobs()
 
     async def process_job(self, job_id: UUID) -> None:
+        staged_chunks: list[StoredChunk] = []
         try:
             document = await self._repository.mark_processing(job_id)
+            if document is None:
+                return
             parser = parser_for(document.mime_type)
             sections = await asyncio.to_thread(parser.parse, document.storage_path)
             drafts = self._chunker.chunk(sections)
@@ -126,7 +126,7 @@ class KnowledgeService:
             vectors = await self._embeddings.embed([draft.content for draft in drafts])
             if len(vectors) != len(drafts):
                 raise RuntimeError("Embedding provider returned an unexpected vector count.")
-            stored_chunks = await self._repository.replace_chunks(document, drafts)
+            staged_chunks = await self._repository.stage_chunks(job_id, document, drafts)
             await self._vector_store.upsert(
                 [
                     EmbeddingVector(
@@ -136,20 +136,24 @@ class KnowledgeService:
                         model=self._embeddings.model,
                         metadata=chunk.metadata,
                     )
-                    for chunk, vector in zip(stored_chunks, vectors, strict=True)
+                    for chunk, vector in zip(staged_chunks, vectors, strict=True)
                 ]
             )
+            await self._repository.activate_job(job_id)
         except DocumentParsingError as exc:
-            await self._repository.finish_job(job_id, IngestionState.FAILED, str(exc)[:1_000])
+            await self._fail_ingestion(job_id, str(exc)[:1_000])
         except Exception:
-            await self._repository.finish_job(
+            await self._fail_ingestion(
                 job_id,
-                IngestionState.FAILED,
-                "Ingestion failed unexpectedly. Check server logs for parser or embedding errors.",
+                "Ingestion failed. Check server logs for parser, embedding, vector, or "
+                "activation errors.",
             )
             raise
-        else:
-            await self._repository.finish_job(job_id, IngestionState.COMPLETED)
+
+    async def _fail_ingestion(self, job_id: UUID, error: str) -> None:
+        cleanup_ids = await self._repository.fail_job(job_id, error)
+        if cleanup_ids is not None:
+            await self._vector_store.delete_chunks(cleanup_ids)
 
     async def search(
         self,

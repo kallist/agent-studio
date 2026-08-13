@@ -53,16 +53,26 @@ export function ToastRegion({ toast, onDismiss }: { toast: ToastMessage | null; 
 }
 
 export function ConfirmDialog({ open, title, description, confirmLabel, danger = false, onConfirm, onCancel }: { open: boolean; title: string; description: string; confirmLabel: string; danger?: boolean; onConfirm: () => void; onCancel: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const cancelCallbackRef = useRef(onCancel);
+  useEffect(() => { cancelCallbackRef.current = onCancel; }, [onCancel]);
   useEffect(() => {
     if (!open) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
     cancelRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onCancel(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onCancel]);
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+      opener?.focus();
+    };
+  }, [open]);
   if (!open) return null;
-  return <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onCancel(); }}><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description"><span className={`dialog-icon ${danger ? "danger" : ""}`}><Icon name={danger ? "trash" : "info"} /></span><h2 id="confirm-title">{title}</h2><p id="confirm-description">{description}</p><div className="dialog-actions"><Button ref={cancelRef} variant="secondary" onClick={onCancel}>Cancel</Button><Button variant={danger ? "danger" : "primary"} onClick={onConfirm}>{confirmLabel}</Button></div></div></div>;
+  return <dialog ref={dialogRef} className="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description" onCancel={(event) => { event.preventDefault(); cancelCallbackRef.current(); }} onMouseDown={(event) => { if (event.currentTarget === event.target) cancelCallbackRef.current(); }}><span className={`dialog-icon ${danger ? "danger" : ""}`}><Icon name={danger ? "trash" : "info"} /></span><h2 id="confirm-title">{title}</h2><p id="confirm-description">{description}</p><div className="dialog-actions"><Button ref={cancelRef} variant="secondary" onClick={onCancel}>Cancel</Button><Button variant={danger ? "danger" : "primary"} onClick={onConfirm}>{confirmLabel}</Button></div></dialog>;
 }
 
 export function formatRelativeTime(value: string): string {

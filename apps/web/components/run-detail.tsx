@@ -28,6 +28,8 @@ const detailMeta: Record<KnownEventType, { label: string; category: string; icon
   "tool.completed": { label: "Tool Result", category: "Tool", icon: "check", tone: "tool" },
   "tool.failed": { label: "Tool Result", category: "Failed", icon: "error", tone: "failed" },
   "step.completed": { label: "Step Completed", category: "Runtime", icon: "check", tone: "model" },
+  "memory.retrieved": { label: "Memory Retrieved", category: "Memory", icon: "memory", tone: "memory" },
+  "memory.written": { label: "Memory Written", category: "Memory", icon: "memory", tone: "memory" },
   "run.completed": { label: "Final", category: "Output", icon: "check", tone: "final" },
   "run.failed": { label: "Final", category: "Failed", icon: "error", tone: "failed" },
   "run.cancelled": { label: "Run Cancelled", category: "System", icon: "close", tone: "failed" },

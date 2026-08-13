@@ -3,7 +3,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -28,6 +38,13 @@ class AgentModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     runs: Mapped[list[RunModel]] = relationship(back_populates="agent")
+
+
+class AgentMemorySettingModel(Base):
+    __tablename__ = "agent_memory_settings"
+
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
 class RunModel(Base):
@@ -108,6 +125,9 @@ class ChunkModel(Base):
         ForeignKey("knowledge_bases.id"), nullable=False, index=True
     )
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), nullable=False, index=True)
+    ingestion_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("ingestion_jobs.id"), nullable=True, index=True
+    )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -149,3 +169,27 @@ class IngestionJobModel(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     document: Mapped[DocumentModel] = relationship(back_populates="ingestion_jobs")
+
+
+class MemoryModel(Base):
+    __tablename__ = "memories"
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id",
+            "normalized_key",
+            name="uq_memories_agent_normalized_key",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
+    source_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("runs.id"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    importance: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
