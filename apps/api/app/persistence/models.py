@@ -125,6 +125,9 @@ class ChunkModel(Base):
         ForeignKey("knowledge_bases.id"), nullable=False, index=True
     )
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), nullable=False, index=True)
+    ingestion_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("ingestion_jobs.id"), nullable=True, index=True
+    )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
