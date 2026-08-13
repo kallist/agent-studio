@@ -15,7 +15,7 @@ OpenAI embeddings are opt-in through `EMBEDDING_PROVIDER=openai` and `OPENAI_API
 
 ## Data model
 
-`KnowledgeBase` records the active embedding provider/model so incompatible query vectors are never silently compared. `Document` stores the safe display filename, source URI, verified MIME type, byte size, and an opaque generated storage path. `Chunk` owns ordered text plus parser/chunk metadata. `Embedding` owns provider/model/dimensions metadata and the portable fallback vector. `IngestionJob` records `queued`, `processing`, `completed`, or `failed`, with timestamps and a bounded user-safe error.
+`KnowledgeBase` records the active embedding provider/model so incompatible query vectors are never silently compared. `Document` stores the safe display filename, source URI, verified MIME type, byte size, and an opaque generated storage path. `Chunk` owns ordered text plus parser/chunk metadata and is tied to the `IngestionJob` generation that produced it. `Embedding` owns provider/model/dimensions metadata and the portable fallback vector. `IngestionJob` records `queued`, `processing`, `completed`, or `failed`, with timestamps and a bounded user-safe error.
 
 Agents persist attached knowledge-base IDs and enable the stable tool name `knowledge_search`. The runtime adds those IDs server-side; a model cannot choose arbitrary collections by supplying hidden tool arguments.
 
@@ -25,9 +25,13 @@ Agents persist attached knowledge-base IDs and enable the stable tool name `know
 2. It validates filename, extension, reported MIME, content signature/encoding, and size.
 3. It writes to a generated UUID path under `KNOWLEDGE_STORAGE_PATH` and creates a `Document` plus `queued` job.
 4. The API returns HTTP 202 immediately.
-5. A bounded in-process worker marks the job `processing`, parses, chunks, embeds, and upserts vectors.
-6. Success becomes `completed`; parser/provider/storage failure becomes `failed` without crashing the API.
-7. On process startup, abandoned `processing` jobs return to `queued` and all queued jobs are submitted again.
+5. A bounded in-process worker claims the queued job, parses, chunks, and computes embeddings.
+6. New chunks are staged under that job generation and remain invisible while vectors are upserted.
+7. One database transaction activates the generation: it removes the prior completed generation, normalizes chunk order, and marks the job `completed`.
+8. Parser/provider/vector/storage failure marks only the current job `failed` and discards only its staged chunks/vectors. A previous completed generation remains available.
+9. On process startup, abandoned `processing` jobs return to `queued`; retry replaces that job's hidden staging data before activation. Duplicate delivery of a terminal job is an idempotent no-op, and two jobs for one document are not allowed to process concurrently.
+
+Retrieval independently joins every semantic, lexical, and citation-hydration candidate to its owning ingestion job and requires `completed`. This is the second integrity boundary: staged, queued, processing, failed, legacy-ambiguous, and orphaned vector records cannot become citations even if cleanup is interrupted.
 
 The worker is intentionally behind a small `enqueue/start/stop` boundary. A durable queue can replace it without changing routes, parsers, retrieval, or the data model. The local queue is suitable for one API process; see limitations below.
 
@@ -105,13 +109,17 @@ Both `MockRuntime` and `AgentsSdkRuntime` use the hardened application-owned `Ag
 
 ## Miniature benchmark
 
-`tests/fixtures/rag/` contains two small source documents and `benchmark.json`. The automated benchmark ingests the real fixtures, runs three questions, and asserts that a top-3 result contains the expected document and evidence phrase. Additional tests cover:
+`tests/fixtures/rag/` contains two relevant source documents, three distractor documents, and `benchmark.json`. The automated benchmark ingests the real fixtures, runs three questions in both semantic and hybrid modes, requires the identified document/chunk at the declared rank (currently top-1), and computes deterministic Recall@3 against a 1.0 floor. Additional tests cover:
 
 - semantic-only retrieval, `top_k`, and metadata filters;
 - queued ingestion through terminal state;
 - real PDF text extraction with retained page metadata;
 - filename/path traversal, unsupported extension, MIME mismatch, invalid PDF signature, and binary-text rejection;
 - parser crash isolation;
+- vector-write failure after chunk generation with no retrieval result or tool citation;
+- failed replacement preserving the last completed generation;
+- hidden staged data across a simulated worker crash and successful restart recovery;
+- terminal duplicate delivery and concurrent duplicate-job protection;
 - HTTP-boundary oversized-file rejection;
 - recovery of both queued and abandoned processing jobs without accumulating duplicate chunks;
 - the concrete `knowledge_search` schema, permission, timeout, output-limit, and error contract;
@@ -131,12 +139,12 @@ This is a regression benchmark, not a statistically meaningful retrieval evaluat
 
 ## Limitations and next steps
 
-- The local worker is process-local. Multiple API replicas need a durable broker with job leasing/idempotency.
+- The local worker is process-local. Multiple API replicas still need a durable broker with cross-process leases and idempotency; the current document-row serialization protects one shared database but does not replace broker delivery guarantees.
 - Local file storage is not shared or transactional with the database. Production should use object storage plus cleanup/reconciliation jobs.
 - SQLite cosine search loads candidate vectors into the API process and is intended only for local/demo scale.
 - The pgvector adapter has no ANN index yet. Add HNSW/IVFFlat only after corpus and latency measurements justify it.
 - The pre-Alembic startup migration only bridges the newly added agent attachment column. Establish Alembic before further production schema evolution.
-- There is no OCR, table-aware PDF parsing, deduplication, document deletion/re-ingestion endpoint, or tenant authorization yet.
+- There is no OCR, table-aware PDF parsing, deduplication, public document deletion/re-ingestion endpoint, or tenant authorization yet. The generation model and tests cover replacement consistency before that endpoint is introduced.
 - Hybrid lexical scoring is simple overlap rather than BM25 and uses fixed weights.
 - OpenAI embedding batching has no retry/rate-limit policy yet; a production queue should add bounded retries and dead-letter handling.
 - Knowledge-base attachment is stored on an agent definition but not versioned separately in this first slice.

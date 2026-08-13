@@ -6,21 +6,66 @@ import sqlite3
 from io import BytesIO
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from app.domain.contracts import KnowledgeSearchResponse, ToolCall
+from app.domain.contracts import (
+    EmbeddingVector,
+    KnowledgeBaseCreate,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResponse,
+    RetrievalFilters,
+    ToolCall,
+    VectorMatch,
+)
 from app.domain.errors import KnowledgeValidationError, ToolExecutionError, ToolPermissionError
+from app.knowledge.chunking import ChunkDraft
+from app.knowledge.embeddings import DeterministicEmbeddingProvider
+from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.service import KnowledgeService, _validate_upload
+from app.knowledge.vector_store import SqlAlchemyVectorStore
 from app.main import create_app
-from app.persistence.database import settings
-from app.tools.knowledge_search import KnowledgeSearchInput, KnowledgeSearchTool
+from app.persistence.database import build_database, settings
+from app.persistence.models import Base, IngestionJobModel
+from app.tools.knowledge_search import (
+    KnowledgeSearchInput,
+    KnowledgeSearchTool,
+    bind_knowledge_bases,
+)
 from app.tools.registry import ToolExecutor, ToolRegistry
 
 FIXTURES = Path(__file__).parents[3] / "tests" / "fixtures" / "rag"
+
+
+class FailingUpsertVectorStore:
+    def __init__(self) -> None:
+        self.received: list[EmbeddingVector] = []
+
+    async def initialize(self) -> None:
+        return None
+
+    async def upsert(self, records: list[EmbeddingVector]) -> None:
+        self.received = records
+        raise RuntimeError("simulated vector write failure")
+
+    async def delete_chunks(self, chunk_ids: list[UUID]) -> None:
+        return None
+
+    async def delete_document(self, document_id: UUID) -> None:
+        return None
+
+    async def search(
+        self,
+        knowledge_base_ids: list[UUID],
+        query_vector: list[float],
+        top_k: int,
+        filters: RetrievalFilters | None = None,
+    ) -> list[VectorMatch]:
+        return []
 
 
 async def create_base(client: AsyncClient, name: str = "RAG benchmark") -> dict[str, object]:
@@ -46,9 +91,7 @@ async def upload_fixture(
     return payload
 
 
-async def wait_for_job(
-    client: AsyncClient, job_id: str, expected: str
-) -> dict[str, object]:
+async def wait_for_job(client: AsyncClient, job_id: str, expected: str) -> dict[str, object]:
     for _ in range(200):
         response = await client.get(f"/ingestion-jobs/{job_id}")
         assert response.status_code == 200
@@ -64,29 +107,425 @@ async def wait_for_job(
 async def test_rag_benchmark_recalls_expected_chunk_with_citations(client: AsyncClient) -> None:
     base = await create_base(client)
     base_id = str(base["id"])
-    await upload_fixture(client, base_id, "agent_studio.md", "text/markdown")
-    await upload_fixture(client, base_id, "security_policy.txt", "text/plain")
-
     benchmark = json.loads((FIXTURES / "benchmark.json").read_text(encoding="utf-8"))
+    for document in benchmark["documents"]:
+        await upload_fixture(client, base_id, document["fixture"], document["mime_type"])
+
+    recall_k = benchmark["recall_k"]
+    hits = {"semantic": 0, "hybrid": 0}
     for case in benchmark["cases"]:
-        response = await client.post(
-            f"/knowledge-bases/{base_id}/search",
-            json={"query": case["question"], "top_k": 3, "hybrid": True},
+        for algorithm, hybrid in (("semantic", False), ("hybrid", True)):
+            response = await client.post(
+                f"/knowledge-bases/{base_id}/search",
+                json={
+                    "query": case["question"],
+                    "top_k": recall_k,
+                    "hybrid": hybrid,
+                },
+            )
+            assert response.status_code == 200
+            body = response.json()
+            assert body["algorithm"] == algorithm
+            assert len(body["results"]) == recall_k
+            rank = next(
+                (
+                    index
+                    for index, result in enumerate(body["results"], start=1)
+                    if result["document"] == case["expected_document"]
+                    and case["expected_phrase"].lower() in result["content"].lower()
+                ),
+                None,
+            )
+            assert rank == case[f"expected_{algorithm}_rank"], (
+                case["question"],
+                algorithm,
+                [result["document"] for result in body["results"]],
+            )
+            hits[algorithm] += int(rank is not None and rank <= recall_k)
+            top = body["results"][0]
+            assert top["source"].startswith("upload://")
+            assert top["chunk_id"]
+            assert isinstance(top["score"], float)
+
+    case_count = len(benchmark["cases"])
+    for algorithm in ("semantic", "hybrid"):
+        recall_at_k = hits[algorithm] / case_count
+        assert recall_at_k >= benchmark["minimum_recall_at_k"]
+
+
+@pytest.mark.asyncio
+async def test_failed_vector_write_never_exposes_chunks_or_citations(tmp_path: Path) -> None:
+    engine, sessions = build_database(
+        f"sqlite+aiosqlite:///{(tmp_path / 'failed-vector.db').as_posix()}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    repository = KnowledgeRepository(sessions)
+    vector_store = FailingUpsertVectorStore()
+    service = KnowledgeService(
+        repository=repository,
+        vector_store=vector_store,
+        embeddings=DeterministicEmbeddingProvider(),
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    queued_jobs: list[UUID] = []
+    service.bind_enqueue(queued_jobs.append)
+    base = await service.create_base(
+        KnowledgeBaseCreate(name="Failed ingestion", description="Regression corpus")
+    )
+    accepted = await service.queue_upload(
+        base.id,
+        "failed.txt",
+        "text/plain",
+        b"failed-vector-exclusive-token must never become cited evidence",
+    )
+    assert queued_jobs == [accepted.ingestion_job.id]
+
+    with pytest.raises(RuntimeError, match="simulated vector write failure"):
+        await service.process_job(accepted.ingestion_job.id)
+
+    job = await service.get_job(accepted.ingestion_job.id)
+    assert vector_store.received
+    assert all(record.chunk_id for record in vector_store.received)
+    assert job.state.value == "failed"
+
+    direct = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="failed-vector-exclusive-token", top_k=5, hybrid=True),
+    )
+    assert direct.results == []
+
+    with bind_knowledge_bases([base.id]):
+        tool_result = await KnowledgeSearchTool(service).execute(
+            KnowledgeSearchInput(query="failed-vector-exclusive-token", top_k=5)
         )
-        assert response.status_code == 200
-        body = response.json()
-        assert body["algorithm"] == "hybrid"
-        assert body["results"]
-        relevant = [
-            result
-            for result in body["results"]
-            if result["document"] == case["expected_document"]
-            and case["expected_phrase"].lower() in result["content"].lower()
+    assert tool_result.results == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_reingestion_preserves_last_completed_generation(tmp_path: Path) -> None:
+    engine, sessions = build_database(
+        f"sqlite+aiosqlite:///{(tmp_path / 'failed-reingestion.db').as_posix()}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    repository = KnowledgeRepository(sessions)
+    embeddings = DeterministicEmbeddingProvider()
+    completed_store = SqlAlchemyVectorStore(sessions)
+    service = KnowledgeService(
+        repository=repository,
+        vector_store=completed_store,
+        embeddings=embeddings,
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    queued_jobs: list[UUID] = []
+    service.bind_enqueue(queued_jobs.append)
+    base = await service.create_base(
+        KnowledgeBaseCreate(name="Versioned ingestion", description="Regression corpus")
+    )
+    accepted = await service.queue_upload(
+        base.id,
+        "versioned.txt",
+        "text/plain",
+        b"stable-completed-generation remains trusted evidence",
+    )
+    await service.process_job(accepted.ingestion_job.id)
+    before = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="stable-completed-generation", top_k=1, hybrid=True),
+    )
+    assert before.results
+    completed_chunk_id = before.results[0].chunk_id
+
+    stored_file = next((tmp_path / "knowledge").iterdir())
+    stored_file.write_bytes(b"failed-replacement-generation must remain hidden")
+    async with sessions() as session:
+        replacement = IngestionJobModel(document_id=str(accepted.document.id), state="queued")
+        session.add(replacement)
+        await session.commit()
+        await session.refresh(replacement)
+        replacement_job_id = UUID(replacement.id)
+
+    failing_store = FailingUpsertVectorStore()
+    replacement_service = KnowledgeService(
+        repository=repository,
+        vector_store=failing_store,
+        embeddings=embeddings,
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    with pytest.raises(RuntimeError, match="simulated vector write failure"):
+        await replacement_service.process_job(replacement_job_id)
+
+    assert (await replacement_service.get_job(replacement_job_id)).state.value == "failed"
+    after = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="stable-completed-generation", top_k=3, hybrid=True),
+    )
+    assert after.results[0].chunk_id == completed_chunk_id
+    assert all("failed-replacement-generation" not in result.content for result in after.results)
+
+    # Duplicate delivery of a terminal job is an idempotent no-op.
+    await service.process_job(accepted.ingestion_job.id)
+    duplicate = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="stable-completed-generation", top_k=1, hybrid=True),
+    )
+    assert duplicate.results[0].chunk_id == completed_chunk_id
+
+    stored_file.write_bytes(b"successful-replacement-generation is now trusted")
+    async with sessions() as session:
+        successful_replacement = IngestionJobModel(
+            document_id=str(accepted.document.id), state="queued"
+        )
+        session.add(successful_replacement)
+        await session.commit()
+        await session.refresh(successful_replacement)
+        successful_job_id = UUID(successful_replacement.id)
+    await service.process_job(successful_job_id)
+    current = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="successful-replacement-generation", top_k=1),
+    )
+    assert current.results[0].chunk_id != completed_chunk_id
+    assert "successful-replacement-generation" in current.results[0].content
+    assert "stable-completed-generation" not in current.results[0].content
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_processing_generation_is_hidden_until_restart_recovery(tmp_path: Path) -> None:
+    database_url = f"sqlite+aiosqlite:///{(tmp_path / 'staged-recovery.db').as_posix()}"
+    engine, sessions = build_database(database_url)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    repository = KnowledgeRepository(sessions)
+    embeddings = DeterministicEmbeddingProvider()
+    vector_store = SqlAlchemyVectorStore(sessions)
+    service = KnowledgeService(
+        repository=repository,
+        vector_store=vector_store,
+        embeddings=embeddings,
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    service.bind_enqueue(lambda _job_id: None)
+    base = await service.create_base(
+        KnowledgeBaseCreate(name="Crash recovery", description="Regression corpus")
+    )
+    accepted = await service.queue_upload(
+        base.id,
+        "crash.txt",
+        "text/plain",
+        b"restart-recovery-exclusive-token becomes visible only after activation",
+    )
+    document = await repository.mark_processing(accepted.ingestion_job.id)
+    assert document is not None
+    drafts = [
+        ChunkDraft(
+            index=0,
+            content="restart-recovery-exclusive-token becomes visible only after activation",
+            token_count=6,
+            metadata={"format": "text"},
+        )
+    ]
+    staged = await repository.stage_chunks(accepted.ingestion_job.id, document, drafts)
+    vectors = await embeddings.embed([drafts[0].content])
+    await vector_store.upsert(
+        [
+            EmbeddingVector(
+                chunk_id=staged[0].id,
+                vector=vectors[0],
+                provider=embeddings.name,
+                model=embeddings.model,
+                metadata=staged[0].metadata,
+            )
         ]
-        assert relevant, case["question"]
-        assert relevant[0]["source"].startswith("upload://")
-        assert relevant[0]["chunk_id"]
-        assert isinstance(relevant[0]["score"], float)
+    )
+    hidden = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="restart-recovery-exclusive-token", top_k=3),
+    )
+    assert hidden.results == []
+    await engine.dispose()
+
+    restarted_engine, restarted_sessions = build_database(database_url)
+    restarted_repository = KnowledgeRepository(restarted_sessions)
+    restarted_service = KnowledgeService(
+        repository=restarted_repository,
+        vector_store=SqlAlchemyVectorStore(restarted_sessions),
+        embeddings=embeddings,
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    assert await restarted_service.recover_jobs() == [accepted.ingestion_job.id]
+    await restarted_service.process_job(accepted.ingestion_job.id)
+    visible = await restarted_service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="restart-recovery-exclusive-token", top_k=1),
+    )
+    assert visible.results[0].document == "crash.txt"
+    assert visible.results[0].chunk_index == 0
+    await restarted_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_jobs_for_one_document_do_not_process_concurrently(tmp_path: Path) -> None:
+    engine, sessions = build_database(
+        f"sqlite+aiosqlite:///{(tmp_path / 'duplicate-jobs.db').as_posix()}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    repository = KnowledgeRepository(sessions)
+    base = await repository.create_base(
+        KnowledgeBaseCreate(name="Duplicate jobs", description="Regression corpus"),
+        "local",
+        "feature-hash-v1-256",
+    )
+    document, first_job = await repository.create_document_and_job(
+        base.id,
+        "duplicate.txt",
+        "upload://duplicate.txt",
+        "text/plain",
+        4,
+        tmp_path / "duplicate.txt",
+    )
+    async with sessions() as session:
+        duplicate = IngestionJobModel(document_id=str(document.id), state="queued")
+        session.add(duplicate)
+        await session.commit()
+        await session.refresh(duplicate)
+        duplicate_id = UUID(duplicate.id)
+
+    assert await repository.mark_processing(first_job.id) is not None
+    assert await repository.mark_processing(duplicate_id) is None
+    duplicate_view = await repository.get_job(duplicate_id)
+    assert duplicate_view.state.value == "failed"
+    assert "already processing" in str(duplicate_view.error)
+    await repository.fail_job(first_job.id, "test cleanup")
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_legacy_chunk_visibility_migration_is_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path = tmp_path / "legacy-rag.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE knowledge_bases (
+                id VARCHAR(36) PRIMARY KEY,
+                name VARCHAR(120) NOT NULL,
+                description TEXT NOT NULL,
+                embedding_provider VARCHAR(80) NOT NULL,
+                embedding_model VARCHAR(160) NOT NULL,
+                created_at DATETIME NOT NULL
+            );
+            CREATE TABLE documents (
+                id VARCHAR(36) PRIMARY KEY,
+                knowledge_base_id VARCHAR(36) NOT NULL,
+                filename VARCHAR(255) NOT NULL,
+                source VARCHAR(500) NOT NULL,
+                mime_type VARCHAR(120) NOT NULL,
+                size_bytes BIGINT NOT NULL,
+                storage_path TEXT NOT NULL,
+                created_at DATETIME NOT NULL
+            );
+            CREATE TABLE ingestion_jobs (
+                id VARCHAR(36) PRIMARY KEY,
+                document_id VARCHAR(36) NOT NULL,
+                state VARCHAR(20) NOT NULL,
+                error TEXT,
+                queued_at DATETIME NOT NULL,
+                started_at DATETIME,
+                completed_at DATETIME
+            );
+            CREATE TABLE chunks (
+                id VARCHAR(36) PRIMARY KEY,
+                knowledge_base_id VARCHAR(36) NOT NULL,
+                document_id VARCHAR(36) NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                token_count INTEGER NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at DATETIME NOT NULL,
+                UNIQUE (document_id, chunk_index)
+            );
+            INSERT INTO knowledge_bases VALUES (
+                '00000000-0000-0000-0000-000000000001', 'Legacy', '', 'local',
+                'feature-hash-v1-256', '2026-08-13 00:00:00'
+            );
+            INSERT INTO documents VALUES (
+                '00000000-0000-0000-0000-000000000011',
+                '00000000-0000-0000-0000-000000000001', 'completed.txt',
+                'upload://completed.txt', 'text/plain', 1, 'completed.txt',
+                '2026-08-13 00:00:00'
+            );
+            INSERT INTO documents VALUES (
+                '00000000-0000-0000-0000-000000000012',
+                '00000000-0000-0000-0000-000000000001', 'ambiguous.txt',
+                'upload://ambiguous.txt', 'text/plain', 1, 'ambiguous.txt',
+                '2026-08-13 00:00:00'
+            );
+            INSERT INTO ingestion_jobs VALUES (
+                '00000000-0000-0000-0000-000000000021',
+                '00000000-0000-0000-0000-000000000011', 'completed', NULL,
+                '2026-08-13 00:00:00', '2026-08-13 00:00:01', '2026-08-13 00:00:02'
+            );
+            INSERT INTO ingestion_jobs VALUES (
+                '00000000-0000-0000-0000-000000000022',
+                '00000000-0000-0000-0000-000000000012', 'completed', NULL,
+                '2026-08-13 00:00:00', '2026-08-13 00:00:01', '2026-08-13 00:00:02'
+            );
+            INSERT INTO ingestion_jobs VALUES (
+                '00000000-0000-0000-0000-000000000023',
+                '00000000-0000-0000-0000-000000000012', 'failed', 'legacy failure',
+                '2026-08-13 00:01:00', '2026-08-13 00:01:01', '2026-08-13 00:01:02'
+            );
+            INSERT INTO chunks VALUES (
+                '00000000-0000-0000-0000-000000000031',
+                '00000000-0000-0000-0000-000000000001',
+                '00000000-0000-0000-0000-000000000011', 0,
+                'completed legacy evidence', 3, '{}', '2026-08-13 00:00:02'
+            );
+            INSERT INTO chunks VALUES (
+                '00000000-0000-0000-0000-000000000032',
+                '00000000-0000-0000-0000-000000000001',
+                '00000000-0000-0000-0000-000000000012', 0,
+                'ambiguous failed replacement', 3, '{}', '2026-08-13 00:01:02'
+            );
+            """
+        )
+
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setattr(settings, "embedding_provider", "local")
+    app = create_app(
+        f"sqlite+aiosqlite:///{database_path.as_posix()}",
+        str(tmp_path / "knowledge"),
+    )
+    async with app.router.lifespan_context(app):
+        pass
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(chunks)").fetchall()
+        }
+        generations = dict(
+            connection.execute(
+                "SELECT document_id, ingestion_job_id FROM chunks"
+            ).fetchall()
+        )
+    assert "ingestion_job_id" in columns
+    assert generations["00000000-0000-0000-0000-000000000011"] == (
+        "00000000-0000-0000-0000-000000000021"
+    )
+    assert generations["00000000-0000-0000-0000-000000000012"] is None
 
 
 @pytest.mark.asyncio
@@ -316,9 +755,7 @@ async def test_worker_recovers_queued_and_processing_jobs_without_duplicate_chun
             base = await create_base(http, "Recovery benchmark")
             base_id = str(base["id"])
             queued = await upload_fixture(http, base_id, "agent_studio.md", "text/markdown")
-            processing = await upload_fixture(
-                http, base_id, "security_policy.txt", "text/plain"
-            )
+            processing = await upload_fixture(http, base_id, "security_policy.txt", "text/plain")
 
     job_states = {
         str(queued["ingestion_job"]["id"]): "queued",

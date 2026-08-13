@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.domain.contracts import (
@@ -24,6 +24,7 @@ from app.knowledge.chunking import ChunkDraft
 from app.persistence.models import (
     ChunkModel,
     DocumentModel,
+    EmbeddingModel,
     IngestionJobModel,
     KnowledgeBaseModel,
 )
@@ -164,14 +165,32 @@ class KnowledgeRepository:
             await session.commit()
             return [UUID(value) for value in rows]
 
-    async def mark_processing(self, job_id: UUID) -> StoredDocument:
+    async def mark_processing(self, job_id: UUID) -> StoredDocument | None:
         async with self._sessions() as session:
             job = await session.get(IngestionJobModel, str(job_id))
             if job is None:
                 raise EntityNotFoundError(f"Ingestion job '{job_id}' was not found.")
-            document = await session.get(DocumentModel, job.document_id)
+            document = await session.scalar(
+                select(DocumentModel).where(DocumentModel.id == job.document_id).with_for_update()
+            )
             if document is None:
                 raise EntityNotFoundError(f"Document '{job.document_id}' was not found.")
+            await session.refresh(job)
+            if job.state != IngestionState.QUEUED.value:
+                return None
+            active_job_id = await session.scalar(
+                select(IngestionJobModel.id)
+                .where(IngestionJobModel.document_id == job.document_id)
+                .where(IngestionJobModel.state == IngestionState.PROCESSING.value)
+                .where(IngestionJobModel.id != job.id)
+                .limit(1)
+            )
+            if active_job_id is not None:
+                job.state = IngestionState.FAILED.value
+                job.error = "Another ingestion job is already processing this document."
+                job.completed_at = datetime.now(UTC)
+                await session.commit()
+                return None
             job.state = IngestionState.PROCESSING.value
             job.started_at = datetime.now(UTC)
             job.completed_at = None
@@ -179,32 +198,30 @@ class KnowledgeRepository:
             await session.commit()
             return _stored_document(document)
 
-    async def finish_job(
-        self, job_id: UUID, state: IngestionState, error: str | None = None
-    ) -> None:
-        if state not in {IngestionState.COMPLETED, IngestionState.FAILED}:
-            raise ValueError("Ingestion jobs can only finish as completed or failed.")
+    async def stage_chunks(
+        self, job_id: UUID, document: StoredDocument, drafts: list[ChunkDraft]
+    ) -> list[StoredChunk]:
         async with self._sessions() as session:
             job = await session.get(IngestionJobModel, str(job_id))
             if job is None:
                 raise EntityNotFoundError(f"Ingestion job '{job_id}' was not found.")
-            job.state = state.value
-            job.error = error
-            job.completed_at = datetime.now(UTC)
-            await session.commit()
-
-    async def replace_chunks(
-        self, document: StoredDocument, drafts: list[ChunkDraft]
-    ) -> list[StoredChunk]:
-        async with self._sessions() as session:
+            if job.document_id != str(document.id) or job.state != IngestionState.PROCESSING.value:
+                raise RuntimeError("Chunks can only be staged for the active ingestion job.")
+            staged_ids = select(ChunkModel.id).where(ChunkModel.ingestion_job_id == str(job_id))
             await session.execute(
-                delete(ChunkModel).where(ChunkModel.document_id == str(document.id))
+                delete(EmbeddingModel).where(EmbeddingModel.chunk_id.in_(staged_ids))
+            )
+            await session.execute(
+                delete(ChunkModel).where(ChunkModel.ingestion_job_id == str(job_id))
             )
             models = [
                 ChunkModel(
                     knowledge_base_id=str(document.knowledge_base_id),
                     document_id=str(document.id),
-                    chunk_index=draft.index,
+                    ingestion_job_id=str(job_id),
+                    # Pending generations use a disjoint index range. Activation
+                    # removes the prior generation and normalizes these to 0..N.
+                    chunk_index=-(draft.index + 1),
                     content=draft.content,
                     token_count=draft.token_count,
                     metadata_json=json.dumps(draft.metadata, ensure_ascii=False),
@@ -224,6 +241,62 @@ class KnowledgeRepository:
                 for model in models
             ]
 
+    async def activate_job(self, job_id: UUID) -> None:
+        async with self._sessions() as session:
+            job = await session.get(IngestionJobModel, str(job_id))
+            if job is None:
+                raise EntityNotFoundError(f"Ingestion job '{job_id}' was not found.")
+            if job.state == IngestionState.COMPLETED.value:
+                return
+            if job.state != IngestionState.PROCESSING.value:
+                raise RuntimeError("Only a processing ingestion job can be activated.")
+
+            old_chunk_ids = select(ChunkModel.id).where(
+                ChunkModel.document_id == job.document_id,
+                or_(
+                    ChunkModel.ingestion_job_id.is_(None),
+                    ChunkModel.ingestion_job_id != str(job_id),
+                ),
+            )
+            await session.execute(
+                delete(EmbeddingModel).where(EmbeddingModel.chunk_id.in_(old_chunk_ids))
+            )
+            await session.execute(
+                delete(ChunkModel).where(
+                    ChunkModel.document_id == job.document_id,
+                    or_(
+                        ChunkModel.ingestion_job_id.is_(None),
+                        ChunkModel.ingestion_job_id != str(job_id),
+                    ),
+                )
+            )
+            await session.execute(
+                update(ChunkModel)
+                .where(ChunkModel.ingestion_job_id == str(job_id))
+                .values(chunk_index=(-ChunkModel.chunk_index) - 1)
+            )
+            job.state = IngestionState.COMPLETED.value
+            job.error = None
+            job.completed_at = datetime.now(UTC)
+            await session.commit()
+
+    async def fail_job(self, job_id: UUID, error: str) -> None:
+        async with self._sessions() as session:
+            job = await session.get(IngestionJobModel, str(job_id))
+            if job is None:
+                raise EntityNotFoundError(f"Ingestion job '{job_id}' was not found.")
+            staged_ids = select(ChunkModel.id).where(ChunkModel.ingestion_job_id == str(job_id))
+            await session.execute(
+                delete(EmbeddingModel).where(EmbeddingModel.chunk_id.in_(staged_ids))
+            )
+            await session.execute(
+                delete(ChunkModel).where(ChunkModel.ingestion_job_id == str(job_id))
+            )
+            job.state = IngestionState.FAILED.value
+            job.error = error
+            job.completed_at = datetime.now(UTC)
+            await session.commit()
+
     async def list_chunk_candidates(
         self, knowledge_base_ids: list[UUID], filters: RetrievalFilters | None
     ) -> list[tuple[UUID, str]]:
@@ -232,7 +305,10 @@ class KnowledgeRepository:
         statement = (
             select(ChunkModel.id, ChunkModel.content)
             .join(DocumentModel, DocumentModel.id == ChunkModel.document_id)
+            .join(IngestionJobModel, IngestionJobModel.id == ChunkModel.ingestion_job_id)
             .where(ChunkModel.knowledge_base_id.in_([str(value) for value in knowledge_base_ids]))
+            .where(IngestionJobModel.state == IngestionState.COMPLETED.value)
+            .where(IngestionJobModel.document_id == ChunkModel.document_id)
         )
         if filters is not None:
             if filters.document_id is not None:
@@ -254,7 +330,10 @@ class KnowledgeRepository:
                 await session.execute(
                     select(ChunkModel, DocumentModel)
                     .join(DocumentModel, DocumentModel.id == ChunkModel.document_id)
+                    .join(IngestionJobModel, IngestionJobModel.id == ChunkModel.ingestion_job_id)
                     .where(ChunkModel.id.in_(ids))
+                    .where(IngestionJobModel.state == IngestionState.COMPLETED.value)
+                    .where(IngestionJobModel.document_id == ChunkModel.document_id)
                 )
             ).all()
         by_id = {chunk.id: (chunk, document) for chunk, document in rows}

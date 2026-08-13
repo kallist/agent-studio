@@ -103,11 +103,41 @@ app = create_app()
 
 def _apply_lightweight_schema_migrations(connection: Connection) -> None:
     """Bridge the pre-Alembic local schema until the first formal migration baseline."""
-    columns = {column["name"] for column in inspect(connection).get_columns("agents")}
-    if "knowledge_base_ids_json" not in columns:
+    inspector = inspect(connection)
+    agent_columns = {column["name"] for column in inspector.get_columns("agents")}
+    if "knowledge_base_ids_json" not in agent_columns:
+        connection.execute(
+            text("ALTER TABLE agents ADD COLUMN knowledge_base_ids_json TEXT DEFAULT '[]'")
+        )
+
+    chunk_columns = {column["name"] for column in inspector.get_columns("chunks")}
+    if "ingestion_job_id" not in chunk_columns:
+        connection.execute(text("ALTER TABLE chunks ADD COLUMN ingestion_job_id VARCHAR(36)"))
+        # Legacy chunks are safe to expose only when the newest job for their
+        # document is completed. Ambiguous processing/failed replacements stay hidden.
         connection.execute(
             text(
-                "ALTER TABLE agents ADD COLUMN knowledge_base_ids_json "
-                "TEXT DEFAULT '[]'"
+                """
+                UPDATE chunks
+                SET ingestion_job_id = (
+                    SELECT ingestion_jobs.id
+                    FROM ingestion_jobs
+                    WHERE ingestion_jobs.document_id = chunks.document_id
+                    ORDER BY ingestion_jobs.queued_at DESC, ingestion_jobs.id DESC
+                    LIMIT 1
+                )
+                WHERE (
+                    SELECT ingestion_jobs.state
+                    FROM ingestion_jobs
+                    WHERE ingestion_jobs.document_id = chunks.document_id
+                    ORDER BY ingestion_jobs.queued_at DESC, ingestion_jobs.id DESC
+                    LIMIT 1
+                ) = 'completed'
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_chunks_ingestion_job_id ON chunks (ingestion_job_id)"
             )
         )

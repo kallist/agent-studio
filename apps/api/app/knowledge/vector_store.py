@@ -7,8 +7,13 @@ from uuid import UUID
 from sqlalchemy import bindparam, delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.domain.contracts import EmbeddingVector, RetrievalFilters, VectorMatch
-from app.persistence.models import ChunkModel, DocumentModel, EmbeddingModel
+from app.domain.contracts import EmbeddingVector, IngestionState, RetrievalFilters, VectorMatch
+from app.persistence.models import (
+    ChunkModel,
+    DocumentModel,
+    EmbeddingModel,
+    IngestionJobModel,
+)
 
 
 class SqlAlchemyVectorStore:
@@ -43,6 +48,17 @@ class SqlAlchemyVectorStore:
             )
             await session.commit()
 
+    async def delete_chunks(self, chunk_ids: list[UUID]) -> None:
+        if not chunk_ids:
+            return
+        async with self._sessions() as session:
+            await session.execute(
+                delete(EmbeddingModel).where(
+                    EmbeddingModel.chunk_id.in_([str(value) for value in chunk_ids])
+                )
+            )
+            await session.commit()
+
     async def delete_document(self, document_id: UUID) -> None:
         async with self._sessions() as session:
             chunk_ids = select(ChunkModel.id).where(ChunkModel.document_id == str(document_id))
@@ -64,7 +80,10 @@ class SqlAlchemyVectorStore:
             select(EmbeddingModel.chunk_id, EmbeddingModel.vector_json)
             .join(ChunkModel, ChunkModel.id == EmbeddingModel.chunk_id)
             .join(DocumentModel, DocumentModel.id == ChunkModel.document_id)
+            .join(IngestionJobModel, IngestionJobModel.id == ChunkModel.ingestion_job_id)
             .where(ChunkModel.knowledge_base_id.in_([str(value) for value in knowledge_base_ids]))
+            .where(IngestionJobModel.state == IngestionState.COMPLETED.value)
+            .where(IngestionJobModel.document_id == ChunkModel.document_id)
         )
         if filters is not None:
             if filters.document_id is not None:
@@ -125,6 +144,19 @@ class PgVectorStore(SqlAlchemyVectorStore):
                 )
             await session.commit()
 
+    async def delete_chunks(self, chunk_ids: list[UUID]) -> None:
+        if not chunk_ids:
+            return
+        async with self._sessions() as session:
+            await session.execute(
+                text("DELETE FROM rag_vectors WHERE chunk_id IN :chunk_ids").bindparams(
+                    bindparam("chunk_ids", expanding=True)
+                ),
+                {"chunk_ids": [str(value) for value in chunk_ids]},
+            )
+            await session.commit()
+        await super().delete_chunks(chunk_ids)
+
     async def search(
         self,
         knowledge_base_ids: list[UUID],
@@ -134,11 +166,16 @@ class PgVectorStore(SqlAlchemyVectorStore):
     ) -> list[VectorMatch]:
         if not knowledge_base_ids:
             return []
-        clauses = ["c.knowledge_base_id IN :knowledge_base_ids"]
+        clauses = [
+            "c.knowledge_base_id IN :knowledge_base_ids",
+            "j.state = :completed_state",
+            "j.document_id = c.document_id",
+        ]
         params: dict[str, object] = {
             "knowledge_base_ids": [str(value) for value in knowledge_base_ids],
             "query_vector": _vector_literal(query_vector),
             "top_k": top_k,
+            "completed_state": IngestionState.COMPLETED.value,
         }
         if filters is not None:
             if filters.document_id is not None:
@@ -157,7 +194,8 @@ class PgVectorStore(SqlAlchemyVectorStore):
             FROM rag_vectors v
             JOIN chunks c ON c.id = v.chunk_id
             JOIN documents d ON d.id = c.document_id
-            WHERE {' AND '.join(clauses)}
+            JOIN ingestion_jobs j ON j.id = c.ingestion_job_id
+            WHERE {" AND ".join(clauses)}
             ORDER BY v.embedding <=> CAST(:query_vector AS vector)
             LIMIT :top_k
             """
@@ -165,8 +203,7 @@ class PgVectorStore(SqlAlchemyVectorStore):
         async with self._sessions() as session:
             rows = (await session.execute(statement, params)).all()
         return [
-            VectorMatch(chunk_id=UUID(chunk_id), score=float(score))
-            for chunk_id, score in rows
+            VectorMatch(chunk_id=UUID(chunk_id), score=float(score)) for chunk_id, score in rows
         ]
 
 
