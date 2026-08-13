@@ -11,6 +11,8 @@ const labels: Record<AgentEvent["type"], string> = {
   "tool.completed": "Tool result",
   "tool.failed": "Tool failed",
   "step.completed": "Step complete",
+  "memory.retrieved": "Memory retrieved",
+  "memory.written": "Memory written",
   "run.completed": "Final answer",
   "run.failed": "Run failed",
   "run.cancelled": "Run cancelled",

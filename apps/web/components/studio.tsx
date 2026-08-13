@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
+import { MemoryPanel } from "@/components/memory-panel";
 import { TraceTimeline } from "@/components/trace-timeline";
 import { KnowledgeStudio } from "@/components/knowledge-studio";
 import {
@@ -10,6 +11,7 @@ import {
   AgentEvent,
   api,
   eventTypes,
+  MemoryRecord,
   RunResult,
   RuntimeMode,
   KnowledgeBase,
@@ -22,6 +24,8 @@ export function Studio() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [run, setRun] = useState<RunResult | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [memories, setMemories] = useState<MemoryRecord[]>([]);
+  const [memoryLoading, setMemoryLoading] = useState(false);
   const [input, setInput] = useState(defaultInput);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -35,6 +39,17 @@ export function Studio() {
     () => agents.find((agent) => agent.id === selectedId) ?? null,
     [agents, selectedId],
   );
+
+  const loadMemories = useCallback(async (agentId: string) => {
+    setMemoryLoading(true);
+    try {
+      setMemories(await api.listMemories(agentId));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to load memory.");
+    } finally {
+      setMemoryLoading(false);
+    }
+  }, []);
 
   const updateLocation = useCallback((agentId: string, runId?: string) => {
     const params = new URLSearchParams({ agent: agentId });
@@ -59,9 +74,15 @@ export function Studio() {
         event.type === "run.cancelled"
       ) {
         source.close();
-        void api.getRun(runId).then(setRun).catch((reason: unknown) => {
-          setError(reason instanceof Error ? reason.message : "无法刷新 run 状态。");
-        });
+        void api
+          .getRun(runId)
+          .then((latestRun) => {
+            setRun(latestRun);
+            return loadMemories(latestRun.agent_id);
+          })
+          .catch((reason: unknown) => {
+            setError(reason instanceof Error ? reason.message : "无法刷新 run 状态。");
+          });
       }
     };
 
@@ -84,7 +105,7 @@ export function Studio() {
           setError(reason instanceof Error ? reason.message : "无法恢复 run 状态。");
         });
     };
-  }, []);
+  }, [loadMemories]);
 
   useEffect(() => {
     let active = true;
@@ -103,6 +124,7 @@ export function Studio() {
         const initialAgent =
           loadedAgents.find((agent) => agent.id === agentId) ?? loadedAgents[0] ?? null;
         setSelectedId(initialAgent?.id ?? null);
+        if (initialAgent) await loadMemories(initialAgent.id);
         if (runId) {
           const [loadedRun, loadedEvents] = await Promise.all([
             api.getRun(runId),
@@ -129,14 +151,16 @@ export function Studio() {
       active = false;
       streamRef.current?.close();
     };
-  }, [startStream]);
+  }, [loadMemories, startStream]);
 
   function selectAgent(agentId: string) {
     setSelectedId(agentId);
     setRun(null);
     setEvents([]);
+    setMemories([]);
     setError(null);
     updateLocation(agentId);
+    void loadMemories(agentId);
   }
 
   async function createAgent(event: FormEvent<HTMLFormElement>) {
@@ -153,15 +177,41 @@ export function Studio() {
         knowledge_base_ids: data.get("knowledge_base_id")
           ? [String(data.get("knowledge_base_id"))]
           : [],
+        memory_enabled: true,
       });
       setAgents((current) => [created, ...current]);
       setSelectedId(created.id);
       setShowCreate(false);
+      setMemories([]);
       updateLocation(created.id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "创建 Agent 失败。");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function toggleMemory(enabled: boolean) {
+    if (!selected) return;
+    try {
+      await api.setMemoryEnabled(selected.id, enabled);
+      setAgents((current) =>
+        current.map((agent) =>
+          agent.id === selected.id ? { ...agent, memory_enabled: enabled } : agent,
+        ),
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to update memory settings.");
+    }
+  }
+
+  async function deleteMemory(memoryId: string) {
+    if (!selected) return;
+    try {
+      await api.deleteMemory(selected.id, memoryId);
+      setMemories((current) => current.filter((memory) => memory.id !== memoryId));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to delete memory.");
     }
   }
 
@@ -345,6 +395,13 @@ export function Studio() {
                   </button>
                 </div>
               </form>
+              <MemoryPanel
+                enabled={selected.memory_enabled}
+                loading={memoryLoading}
+                memories={memories}
+                onDelete={(memoryId) => void deleteMemory(memoryId)}
+                onToggle={(enabled) => void toggleMemory(enabled)}
+              />
             </>
           )}
         </section>

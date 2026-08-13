@@ -17,6 +17,10 @@ from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.service import KnowledgeService
 from app.knowledge.vector_store import PgVectorStore, SqlAlchemyVectorStore
 from app.knowledge.worker import LocalIngestionWorker
+from app.memory.keys import normalized_memory_key
+from app.memory.policy import MemoryPolicy
+from app.memory.retriever import MemoryRetriever
+from app.memory.store import SqlAlchemyMemoryStore
 from app.persistence.database import build_database, settings
 from app.persistence.models import Base
 from app.persistence.repositories import Repositories
@@ -59,6 +63,9 @@ def create_app(
     registry = default_tool_registry([KnowledgeSearchTool(knowledge_service).as_tool()])
     executor = ToolExecutor(registry)
     repositories = Repositories(sessions)
+    memory_store = SqlAlchemyMemoryStore(sessions)
+    memory_policy = MemoryPolicy()
+    memory_retriever = MemoryRetriever(memory_store, memory_policy)
     provider = OpenAIProvider(
         api_key=settings.openai_api_key,
         default_model=settings.openai_model,
@@ -71,6 +78,9 @@ def create_app(
             RuntimeMode.OPENAI: AgentsSdkRuntime(provider, executor),
         },
         available_tools=registry.names,
+        memory_store=memory_store,
+        memory_retriever=memory_retriever,
+        memory_policy=memory_policy,
     )
 
     @asynccontextmanager
@@ -91,7 +101,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=[origin.strip() for origin in settings.cors_origins.split(",")],
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
     app.include_router(router)
@@ -139,5 +149,47 @@ def _apply_lightweight_schema_migrations(connection: Connection) -> None:
         connection.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS ix_chunks_ingestion_job_id ON chunks (ingestion_job_id)"
+            )
+        )
+
+    connection.execute(
+        text(
+            """
+            INSERT INTO agent_memory_settings (agent_id, enabled)
+            SELECT agents.id, true
+            FROM agents
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM agent_memory_settings
+                WHERE agent_memory_settings.agent_id = agents.id
+            )
+            """
+        )
+    )
+
+    memory_columns = {column["name"] for column in inspector.get_columns("memories")}
+    if "normalized_key" not in memory_columns:
+        connection.execute(text("ALTER TABLE memories ADD COLUMN normalized_key VARCHAR(64)"))
+        rows = connection.execute(
+            text("SELECT id, agent_id, content FROM memories ORDER BY created_at DESC, id DESC")
+        ).mappings()
+        seen: set[tuple[str, str]] = set()
+        for row in rows:
+            key = normalized_memory_key(str(row["content"]))
+            scoped_key = (str(row["agent_id"]), key)
+            if scoped_key in seen:
+                connection.execute(
+                    text("DELETE FROM memories WHERE id = :id"), {"id": row["id"]}
+                )
+                continue
+            seen.add(scoped_key)
+            connection.execute(
+                text("UPDATE memories SET normalized_key = :key WHERE id = :id"),
+                {"key": key, "id": row["id"]},
+            )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_agent_normalized_key "
+                "ON memories (agent_id, normalized_key)"
             )
         )

@@ -26,6 +26,25 @@ test("creates a mock calculator agent and persists its observable run", async ({
   await expect(page.getByText("Tool result")).toBeVisible();
 });
 
+test("writes durable memory and retrieves it in a later run", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "创建 Agent" }).click();
+  await page.getByLabel("Name", { exact: true }).fill(`Memory Agent ${Date.now()}`);
+  await page.getByLabel("Instructions").fill("Use relevant long-term memory.");
+  await page.getByLabel("Runtime mode").selectOption("mock");
+  await page.getByRole("button", { name: "保存 Agent" }).click();
+
+  await page.getByLabel("Message").fill("Remember that project codename is Atlas.");
+  await page.getByRole("button", { name: "Run agent →" }).click();
+  await expect(page.getByText("Memory written")).toBeVisible();
+  await expect(page.getByText("project codename is Atlas", { exact: true })).toBeVisible();
+
+  await page.getByLabel("Message").fill("What is the project codename?");
+  await page.getByRole("button", { name: "Run agent →" }).click();
+  await expect(page.getByText("Memory retrieved")).toBeVisible();
+  await expect(page.getByText("I remember: project codename is Atlas").first()).toBeVisible();
+});
+
 test("ingests knowledge, retrieves a cited chunk, and exposes agent sources", async ({ page }) => {
   const name = `Security handbook ${Date.now()}`;
   await page.goto("/");

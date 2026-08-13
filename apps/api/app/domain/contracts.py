@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from app.memory.contracts import RuntimeMemory
+
 
 class RuntimeMode(StrEnum):
     MOCK = "mock"
@@ -69,6 +71,8 @@ EventType = Literal[
     "tool.completed",
     "tool.failed",
     "step.completed",
+    "memory.retrieved",
+    "memory.written",
     "run.completed",
     "run.failed",
     "run.cancelled",
@@ -85,6 +89,7 @@ class AgentDefinition(BaseModel):
     model: str | None = None
     tools: list[str]
     knowledge_base_ids: list[UUID] = Field(default_factory=list)
+    memory_enabled: bool = True
     created_at: datetime
 
 
@@ -95,6 +100,7 @@ class AgentCreate(BaseModel):
     model: str | None = Field(default=None, max_length=120)
     tools: list[str] = Field(default_factory=lambda: ["calculator"], max_length=20)
     knowledge_base_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    memory_enabled: bool = True
 
 
 class RunRequest(BaseModel):
@@ -177,6 +183,7 @@ class AgentContext(BaseModel):
     user_input: str
     tools: list[ToolSpec]
     steps: list[AgentStep]
+    memory: RuntimeMemory = Field(default_factory=RuntimeMemory)
     omitted_steps: int = Field(default=0, ge=0)
 
 
@@ -195,6 +202,7 @@ class RuntimeInput(BaseModel):
     user_input: str
     granted_permissions: set[str] = Field(default_factory=lambda: {"compute"})
     limits: RuntimeLimits = Field(default_factory=RuntimeLimits)
+    memory: RuntimeMemory = Field(default_factory=RuntimeMemory)
 
 
 class AgentRun(BaseModel):
