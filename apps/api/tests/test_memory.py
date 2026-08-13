@@ -7,7 +7,9 @@ from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.contracts import (
     AgentCreate,
@@ -24,8 +26,8 @@ from app.memory.contracts import MemoryKind, MemoryRecord
 from app.memory.policy import MemoryPolicy
 from app.memory.store import SqlAlchemyMemoryStore
 from app.persistence.database import build_database, settings
-from app.persistence.models import Base
-from app.persistence.repositories import Repositories
+from app.persistence.models import AgentModel, Base
+from app.persistence.repositories import Repositories, _agent_row_statement
 from app.runtime.mock import MockRuntime
 
 
@@ -68,10 +70,10 @@ async def event_types(client: AsyncClient, run_id: object) -> list[str]:
     return [event["type"] for event in response.json()]
 
 
-class PausingRuntime:
+class FinalizationPausingRuntime:
     def __init__(self, delegate: MockRuntime) -> None:
         self._delegate = delegate
-        self.started = asyncio.Event()
+        self.ready_to_finalize = asyncio.Event()
         self.release = asyncio.Event()
 
     @property
@@ -84,9 +86,38 @@ class PausingRuntime:
         emit: EventSink,
         cancellation: CancellationToken | None = None,
     ) -> AgentRun:
-        self.started.set()
+        result = await self._delegate.run(runtime_input, emit, cancellation)
+        self.ready_to_finalize.set()
         await self.release.wait()
-        return await self._delegate.run(runtime_input, emit, cancellation)
+        return result
+
+
+class ConcurrentFinalizationRuntime:
+    def __init__(self, delegate: MockRuntime, expected_runs: int = 2) -> None:
+        self._delegate = delegate
+        self._expected_runs = expected_runs
+        self._ready_count = 0
+        self._guard = asyncio.Lock()
+        self.all_ready = asyncio.Event()
+        self.release = asyncio.Event()
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def run(
+        self,
+        runtime_input: RuntimeInput,
+        emit: EventSink,
+        cancellation: CancellationToken | None = None,
+    ) -> AgentRun:
+        result = await self._delegate.run(runtime_input, emit, cancellation)
+        async with self._guard:
+            self._ready_count += 1
+            if self._ready_count == self._expected_runs:
+                self.all_ready.set()
+        await self.release.wait()
+        return result
 
 
 @pytest.mark.asyncio
@@ -153,7 +184,7 @@ async def test_memory_disabled_prevents_writes(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_disabling_memory_during_run_prevents_atomic_commit(
+async def test_disable_wins_serialization_before_run_finalization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "openai_api_key", None)
@@ -165,8 +196,33 @@ async def test_disabling_memory_during_run_prevents_atomic_commit(
         service = app.state.agent_service
         original_runtime = service._runtimes[RuntimeMode.MOCK]
         assert isinstance(original_runtime, MockRuntime)
-        runtime = PausingRuntime(original_runtime)
+        runtime = FinalizationPausingRuntime(original_runtime)
         service._runtimes[RuntimeMode.MOCK] = runtime
+        repositories = service._repositories
+        original_acquire = repositories._acquire_agent_memory_ownership
+        disable_has_ownership = asyncio.Event()
+        allow_disable_commit = asyncio.Event()
+        finalization_attempted = asyncio.Event()
+        finalization_has_ownership = asyncio.Event()
+
+        async def coordinate_ownership(
+            session: AsyncSession, agent_id: UUID
+        ) -> AgentModel:
+            task = asyncio.current_task()
+            is_disable = task is not None and task.get_name() == "memory-disable"
+            if not is_disable:
+                finalization_attempted.set()
+            agent = await original_acquire(session, agent_id)
+            if is_disable:
+                disable_has_ownership.set()
+                await allow_disable_commit.wait()
+            else:
+                finalization_has_ownership.set()
+            return agent
+
+        monkeypatch.setattr(
+            repositories, "_acquire_agent_memory_ownership", coordinate_ownership
+        )
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
             agent = await create_agent(http, "Disable Race Agent")
             accepted = await http.post(
@@ -174,17 +230,109 @@ async def test_disabling_memory_during_run_prevents_atomic_commit(
                 json={"input": "Remember that project codename is Atlas."},
             )
             assert accepted.status_code == 202
-            await asyncio.wait_for(runtime.started.wait(), timeout=2)
-            disabled = await http.patch(
-                f"/agents/{agent['id']}/memory-settings", json={"enabled": False}
+            await asyncio.wait_for(runtime.ready_to_finalize.wait(), timeout=2)
+            disable_task = asyncio.create_task(
+                http.patch(
+                    f"/agents/{agent['id']}/memory-settings", json={"enabled": False}
+                ),
+                name="memory-disable",
             )
-            assert disabled.status_code == 200
+            await asyncio.wait_for(disable_has_ownership.wait(), timeout=2)
             runtime.release.set()
+            await asyncio.wait_for(finalization_attempted.wait(), timeout=2)
+            await asyncio.sleep(0.05)
+            assert not finalization_has_ownership.is_set()
+
+            allow_disable_commit.set()
+            disabled = await asyncio.wait_for(disable_task, timeout=2)
+            assert disabled.status_code == 200
+            await asyncio.wait_for(finalization_has_ownership.wait(), timeout=2)
             run = await run_result(http, accepted.json()["id"])
 
             assert run["status"] == "completed"
             assert (await http.get(f"/agents/{agent['id']}/memories")).json() == []
             assert "memory.written" not in await event_types(http, run["id"])
+
+
+@pytest.mark.asyncio
+async def test_finalization_wins_then_disable_blocks_future_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    app = create_app(
+        f"sqlite+aiosqlite:///{(tmp_path / 'finalization-wins.db').as_posix()}",
+        str(tmp_path / "knowledge"),
+    )
+    async with app.router.lifespan_context(app):
+        service = app.state.agent_service
+        original_runtime = service._runtimes[RuntimeMode.MOCK]
+        assert isinstance(original_runtime, MockRuntime)
+        runtime = FinalizationPausingRuntime(original_runtime)
+        service._runtimes[RuntimeMode.MOCK] = runtime
+        repositories = service._repositories
+        original_acquire = repositories._acquire_agent_memory_ownership
+        finalization_has_ownership = asyncio.Event()
+        allow_finalization_commit = asyncio.Event()
+        disable_attempted = asyncio.Event()
+        disable_has_ownership = asyncio.Event()
+
+        async def coordinate_ownership(
+            session: AsyncSession, agent_id: UUID
+        ) -> AgentModel:
+            task = asyncio.current_task()
+            is_disable = task is not None and task.get_name() == "memory-disable"
+            if is_disable:
+                disable_attempted.set()
+            agent = await original_acquire(session, agent_id)
+            if is_disable:
+                disable_has_ownership.set()
+            else:
+                finalization_has_ownership.set()
+                await allow_finalization_commit.wait()
+            return agent
+
+        monkeypatch.setattr(
+            repositories, "_acquire_agent_memory_ownership", coordinate_ownership
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+            agent = await create_agent(http, "Finalization Race Agent")
+            accepted = await http.post(
+                f"/agents/{agent['id']}/runs",
+                json={"input": "Remember that project codename is Atlas."},
+            )
+            assert accepted.status_code == 202
+            await asyncio.wait_for(runtime.ready_to_finalize.wait(), timeout=2)
+            runtime.release.set()
+            await asyncio.wait_for(finalization_has_ownership.wait(), timeout=2)
+
+            disable_task = asyncio.create_task(
+                http.patch(
+                    f"/agents/{agent['id']}/memory-settings", json={"enabled": False}
+                ),
+                name="memory-disable",
+            )
+            await asyncio.wait_for(disable_attempted.wait(), timeout=2)
+            await asyncio.sleep(0.05)
+            assert not disable_has_ownership.is_set()
+
+            allow_finalization_commit.set()
+            run = await run_result(http, accepted.json()["id"])
+            disabled = await asyncio.wait_for(disable_task, timeout=2)
+            assert disabled.status_code == 200
+            assert disabled.json()["enabled"] is False
+            assert run["status"] == "completed"
+            assert len((await http.get(f"/agents/{agent['id']}/memories")).json()) == 1
+            assert (await event_types(http, run["id"]))[-2:] == [
+                "memory.written",
+                "run.completed",
+            ]
+
+            later = await run_to_completion(
+                http, agent["id"], "Remember that deployment region is west."
+            )
+            assert later["status"] == "completed"
+            assert "memory.written" not in await event_types(http, later["id"])
+            assert len((await http.get(f"/agents/{agent['id']}/memories")).json()) == 1
 
 
 @pytest.mark.asyncio
@@ -323,6 +471,60 @@ async def test_concurrent_duplicate_writes_upsert_one_agent_scoped_memory(
     assert len(memories) == 1
     assert stored[0].id == stored[1].id == memories[0].id
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_two_concurrent_runs_dedupe_through_complete_application_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    app = create_app(
+        f"sqlite+aiosqlite:///{(tmp_path / 'concurrent-runs.db').as_posix()}",
+        str(tmp_path / "knowledge"),
+    )
+    async with app.router.lifespan_context(app):
+        service = app.state.agent_service
+        original_runtime = service._runtimes[RuntimeMode.MOCK]
+        assert isinstance(original_runtime, MockRuntime)
+        runtime = ConcurrentFinalizationRuntime(original_runtime)
+        service._runtimes[RuntimeMode.MOCK] = runtime
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+            agent = await create_agent(http, "Concurrent Run Agent")
+            requests = [
+                http.post(
+                    f"/agents/{agent['id']}/runs",
+                    json={"input": "Remember that project codename is Atlas."},
+                )
+                for _ in range(2)
+            ]
+            accepted = await asyncio.gather(*requests)
+            assert [response.status_code for response in accepted] == [202, 202]
+            await asyncio.wait_for(runtime.all_ready.wait(), timeout=2)
+            runtime.release.set()
+
+            runs = await asyncio.gather(
+                *(run_result(http, response.json()["id"]) for response in accepted)
+            )
+            assert [run["status"] for run in runs] == ["completed", "completed"]
+            assert [run["error"] for run in runs] == [None, None]
+            memories = (await http.get(f"/agents/{agent['id']}/memories")).json()
+            assert len(memories) == 1
+            assert memories[0]["content"] == "project codename is Atlas"
+            written_memory_ids: list[str] = []
+            for run in runs:
+                events = (await http.get(f"/runs/{run['id']}/events")).json()
+                assert [event["type"] for event in events][-2:] == [
+                    "memory.written",
+                    "run.completed",
+                ]
+                written_memory_ids.append(events[-2]["payload"]["memory_id"])
+            assert written_memory_ids == [memories[0]["id"], memories[0]["id"]]
+
+
+def test_postgresql_agent_memory_ownership_uses_row_lock() -> None:
+    statement = _agent_row_statement(UUID(int=1), for_update=True)
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert compiled.rstrip().endswith("FOR UPDATE")
 
 
 def test_policy_excludes_expired_unrelated_and_sensitive_records() -> None:

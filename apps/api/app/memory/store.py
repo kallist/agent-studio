@@ -5,14 +5,14 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, delete, literal, select
+from sqlalchemy import case, delete, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.memory.contracts import MemoryKind, MemoryRecord
 from app.memory.keys import normalized_memory_key
-from app.persistence.models import AgentMemorySettingModel, MemoryModel
+from app.persistence.models import MemoryModel
 
 
 def _aware(value: datetime) -> datetime:
@@ -36,10 +36,8 @@ def _to_record(model: MemoryModel) -> MemoryRecord:
 async def upsert_memory(
     session: AsyncSession,
     record: MemoryRecord,
-    *,
-    require_enabled: bool = False,
-) -> MemoryRecord | None:
-    """Atomically deduplicate a memory, optionally gated by its current DB setting."""
+) -> MemoryRecord:
+    """Atomically deduplicate a memory inside the caller's transaction."""
 
     if record.kind is not MemoryKind.LONG_TERM:
         raise ValueError("Only long-term memory can be persisted.")
@@ -68,19 +66,7 @@ async def upsert_memory(
         "expires_at": record.expires_at,
         "metadata_json": json.dumps(record.metadata, ensure_ascii=False),
     }
-    if require_enabled:
-        columns = list(values)
-        source = (
-            select(*(literal(values[column]).label(column) for column in columns))
-            .select_from(AgentMemorySettingModel)
-            .where(
-                AgentMemorySettingModel.agent_id == str(record.agent_id),
-                AgentMemorySettingModel.enabled.is_(True),
-            )
-        )
-        statement = statement.from_select(columns, source)
-    else:
-        statement = statement.values(**values)
+    statement = statement.values(**values)
 
     excluded = statement.excluded
     statement = statement.on_conflict_do_update(
@@ -97,9 +83,7 @@ async def upsert_memory(
             "metadata_json": excluded.metadata_json,
         },
     ).returning(MemoryModel.id)
-    stored_id = (await session.execute(statement)).scalar_one_or_none()
-    if stored_id is None:
-        return None
+    stored_id = (await session.execute(statement)).scalar_one()
     stored = await session.get(MemoryModel, stored_id)
     if stored is None:
         raise RuntimeError("Memory upsert did not return a persisted record.")
@@ -112,10 +96,7 @@ class SqlAlchemyMemoryStore:
 
     async def write(self, record: MemoryRecord) -> MemoryRecord:
         async with self._sessions() as session, session.begin():
-            stored = await upsert_memory(session, record)
-            if stored is None:
-                raise RuntimeError("Unconditional memory upsert was unexpectedly skipped.")
-            return stored
+            return await upsert_memory(session, record)
 
     async def list(self, agent_id: UUID) -> list[MemoryRecord]:
         now = datetime.now(UTC)

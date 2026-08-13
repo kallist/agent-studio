@@ -49,7 +49,7 @@ The retriever loads records through `MemoryStore` and applies `MemoryPolicy.rank
 4. A `memory.retrieved` trace event records record IDs and the relevance, recency, importance, and final scores. Memory contents are not duplicated into trace payloads.
 5. The runtime receives conversation, working, and selected long-term memory in an application-owned snapshot.
 6. The OpenAI adapter keeps selected facts in the serialized `AgentContext.memory` data field. Trusted agent instructions contain only the boundary rule that this field is untrusted user data; fact text is never concatenated into those instructions.
-7. After successful runtime completion, the write policy may propose one long-term fact. A single database transaction conditionally upserts it only when the agent's current persisted setting is enabled, appends `memory.written`, and persists `run.completed` plus the terminal run state.
+7. After successful runtime completion, the write policy may propose one long-term fact. Finalization first acquires the same database-owned agent synchronization point used by memory settings updates, then rereads the current persisted setting. A single transaction conditionally upserts the fact only when that setting is enabled, appends `memory.written`, and persists `run.completed` plus the terminal run state.
 8. If any part of that completion transaction fails, the memory write, memory event, and terminal transition roll back together. Failed runs do not write long-term memory.
 
 Writing happens before the terminal run event. Therefore a client that receives `run.completed` can immediately refresh the memory list and see committed data.
@@ -72,7 +72,7 @@ The policy rejects:
 - writes from failed runs;
 - every write while the agent's memory setting is disabled.
 
-Content is normalized with Unicode NFKC, case folding, and whitespace collapsing, then hashed with SHA-256. `(agent_id, normalized_key)` is database-unique, and writes use an atomic upsert, so concurrent runs cannot create duplicate facts for one agent. A repeated fact refreshes its timestamps and source while retaining the greatest importance. v1 does not use a model to infer or summarize memories, avoiding opaque writes and an API-key dependency in tests.
+Content is normalized with Unicode NFKC, case folding, and whitespace collapsing, then hashed with SHA-256. `(agent_id, normalized_key)` is database-unique, and writes use an atomic upsert, so concurrent runs cannot create duplicate facts for one agent. A repeated fact refreshes its timestamps and source while retaining the greatest importance. Each successful run-level upsert emits `memory.written`, including an upsert that deduplicates an existing fact; both events identify the same canonical record. v1 does not use a model to infer or summarize memories, avoiding opaque writes and an API-key dependency in tests.
 
 ## Retrieval policy
 
@@ -103,7 +103,18 @@ Known limitation: lexical retrieval does not understand synonyms or semantic equ
 - Listing or retrieving memory physically purges records whose expiration time has passed.
 - The API exposes physical deletion by both agent ID and memory ID. Supplying another agent's memory ID returns not found and cannot delete across agents.
 - Deleted or expired memory is absent from later retrieval and therefore from prompts.
-- Disabling memory does not silently delete existing records. It stops both retrieval and writes. The write gate is part of the same database statement as the upsert, so a run-start snapshot cannot authorize a later write and there is no check-then-insert gap. Re-enabling resumes access to records that have not expired or been deleted.
+- Disabling memory does not silently delete existing records. It stops both retrieval and writes. Re-enabling resumes access to records that have not expired or been deleted.
+
+### Disable/finalization ordering
+
+Memory settings changes and run finalization are linearizable database operations:
+
+- PostgreSQL locks the corresponding `agents` row with `SELECT ... FOR UPDATE` before either operation reads or changes memory settings. The lock is held through the settings commit or through the atomic Memory/event/terminal commit.
+- SQLite does not claim row-lock support. Both operations start with `BEGIN IMMEDIATE`, so SQLite's write reservation serializes them before either reads the enabled flag. This is deliberately database-wide and coarser than PostgreSQL, but deterministic for the supported local/test adapter.
+- If disable owns and commits the synchronization point first, finalization subsequently sees `enabled=false`, completes the run without durable Memory, and does not emit `memory.written`.
+- If finalization owns the synchronization point first, it may atomically commit its already-authorized Memory, `memory.written`, and terminal state. Disable waits, then commits `enabled=false`; runs finalized after that commit cannot write Memory.
+
+This ordering does not retroactively cancel a finalization transaction that already owns the synchronization point. It guarantees that a completed disable cannot be followed by a durable write from an older finalization transaction that had not already acquired ownership.
 
 ## API and UI
 
@@ -135,9 +146,10 @@ The backend suite verifies:
 - expired records are excluded;
 - ordinary and sensitive inputs are not written;
 - retrieval trace events expose all score components.
-- disabling during an in-flight run prevents both the durable write and `memory.written` event;
+- deterministic interleavings cover both disable-wins and finalization-wins ordering;
 - terminal persistence failure rolls back the memory write;
 - concurrent equivalent writes deduplicate through the database constraint;
+- two concurrent application runs traverse runtime finalization, event persistence, terminal state, and the atomic upsert while producing one canonical Memory;
 - fixed-clock ranking covers relevance, importance, recency, threshold, ties, result limit, and context budget;
 - a combined RAG/Memory run preserves retrieval, `knowledge_search`, citations, memory write, and normalized event order.
 

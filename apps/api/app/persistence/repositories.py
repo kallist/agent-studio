@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Select, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.domain.contracts import (
@@ -72,6 +74,11 @@ def to_event(model: RunEventModel) -> AgentEvent:
     )
 
 
+def _agent_row_statement(agent_id: UUID, *, for_update: bool) -> Select[tuple[AgentModel]]:
+    statement = select(AgentModel).where(AgentModel.id == str(agent_id))
+    return statement.with_for_update() if for_update else statement
+
+
 class Repositories:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
@@ -119,18 +126,14 @@ class Repositories:
             return to_agent(model, memory_enabled=setting.enabled if setting else True)
 
     async def set_memory_enabled(self, agent_id: UUID, enabled: bool) -> MemorySettings:
-        async with self._sessions() as session:
-            agent = await session.get(AgentModel, str(agent_id))
-            if agent is None:
-                raise EntityNotFoundError(f"Agent '{agent_id}' was not found.")
+        async with self._serialized_agent_memory_transaction(agent_id) as (session, _agent):
             setting = await session.get(AgentMemorySettingModel, str(agent_id))
             if setting is None:
                 setting = AgentMemorySettingModel(agent_id=str(agent_id), enabled=enabled)
                 session.add(setting)
             else:
                 setting.enabled = enabled
-            await session.commit()
-            return MemorySettings(agent_id=agent_id, enabled=enabled)
+        return MemorySettings(agent_id=agent_id, enabled=enabled)
 
     async def knowledge_bases_exist(self, knowledge_base_ids: list[UUID]) -> bool:
         if not knowledge_base_ids:
@@ -220,14 +223,16 @@ class Repositories:
     ) -> list[AgentEvent]:
         """Atomically gate/write memory, persist its event, and complete the run."""
 
-        async with self._sessions() as session, session.begin():
+        async with self._serialized_agent_memory_transaction(agent_id) as (session, _agent):
             run = await session.get(RunModel, str(run_id))
             if run is None:
                 raise EntityNotFoundError(f"Run '{run_id}' was not found.")
             if run.agent_id != str(agent_id):
                 raise ValueError("Run and memory candidate belong to different agents.")
 
-            stored = await upsert_memory(session, candidate, require_enabled=True)
+            setting = await session.get(AgentMemorySettingModel, str(agent_id))
+            memory_enabled = setting.enabled if setting is not None else True
+            stored = await upsert_memory(session, candidate) if memory_enabled else None
             persisted_events: list[AgentEvent] = []
             normalized_terminal = terminal_event
             if stored is not None:
@@ -260,6 +265,44 @@ class Repositories:
             await session.flush()
             persisted_events.append(normalized_terminal)
             return persisted_events
+
+    @asynccontextmanager
+    async def _serialized_agent_memory_transaction(
+        self, agent_id: UUID
+    ) -> AsyncIterator[tuple[AsyncSession, AgentModel]]:
+        """Serialize settings changes and finalization on one database-owned agent row."""
+
+        async with self._sessions() as session:
+            try:
+                agent = await self._acquire_agent_memory_ownership(session, agent_id)
+                yield session, agent
+            except BaseException:
+                await session.rollback()
+                raise
+            else:
+                await session.commit()
+
+    async def _acquire_agent_memory_ownership(
+        self, session: AsyncSession, agent_id: UUID
+    ) -> AgentModel:
+        dialect = session.get_bind().dialect.name
+        if dialect == "sqlite":
+            # SQLite has no row-level FOR UPDATE. BEGIN IMMEDIATE obtains the
+            # database write reservation before the enabled flag is observed.
+            await session.execute(text("BEGIN IMMEDIATE"))
+            statement = _agent_row_statement(agent_id, for_update=False)
+        elif dialect == "postgresql":
+            # PostgreSQL holds this row lock until the surrounding transaction
+            # commits, ordering finalization against settings updates.
+            statement = _agent_row_statement(agent_id, for_update=True)
+        else:
+            raise RuntimeError(
+                f"Agent memory serialization does not support database dialect '{dialect}'."
+            )
+        agent = await session.scalar(statement)
+        if agent is None:
+            raise EntityNotFoundError(f"Agent '{agent_id}' was not found.")
+        return agent
 
     async def list_events(self, run_id: UUID, after_sequence: int = 0) -> list[AgentEvent]:
         async with self._sessions() as session:
