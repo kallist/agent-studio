@@ -1,19 +1,34 @@
 {
+  "documents": [
+    {"fixture": "agent_studio.md", "mime_type": "text/markdown"},
+    {"fixture": "security_policy.txt", "mime_type": "text/plain"},
+    {"fixture": "garden_operations.txt", "mime_type": "text/plain"},
+    {"fixture": "finance_playbook.md", "mime_type": "text/markdown"},
+    {"fixture": "support_handbook.txt", "mime_type": "text/plain"}
+  ],
+  "recall_k": 3,
+  "minimum_recall_at_k": 1.0,
   "cases": [
     {
       "question": "What architecture keeps the Agents SDK isolated?",
       "expected_document": "agent_studio.md",
-      "expected_phrase": "hybrid architecture"
+      "expected_phrase": "hybrid architecture",
+      "expected_semantic_rank": 1,
+      "expected_hybrid_rank": 1
     },
     {
       "question": "Which provider lets tests run without an API key?",
       "expected_document": "agent_studio.md",
-      "expected_phrase": "MockProvider"
+      "expected_phrase": "MockProvider",
+      "expected_semantic_rank": 1,
+      "expected_hybrid_rank": 1
     },
     {
       "question": "How are path traversal and parser failures handled for uploads?",
       "expected_document": "security_policy.txt",
-      "expected_phrase": "path traversal"
+      "expected_phrase": "path traversal",
+      "expected_semantic_rank": 1,
+      "expected_hybrid_rank": 1
     }
   ]
 }
