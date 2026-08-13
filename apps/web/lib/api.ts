@@ -1,6 +1,6 @@
 export type RuntimeMode = "mock" | "openai";
 export type RunStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
-export type EventType =
+export type KnownEventType =
   | "run.started"
   | "step.started"
   | "llm.started"
@@ -14,6 +14,7 @@ export type EventType =
   | "run.completed"
   | "run.failed"
   | "run.cancelled";
+export type EventType = KnownEventType | (string & {});
 
 export interface AgentDefinition {
   id: string;
@@ -59,11 +60,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     });
   } catch {
-    throw new Error("无法连接 Agent Studio API。请确认后端已在 8000 端口运行。");
+    throw new Error("Cannot connect to the Agent Studio API. Confirm that the backend is running on port 8000.");
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { detail?: string } | null;
-    throw new Error(body?.detail ?? `API 请求失败 (${response.status})`);
+    throw new Error(body?.detail ?? `API request failed (${response.status}).`);
   }
   return (await response.json()) as T;
 }
@@ -74,6 +75,7 @@ export const api = {
     name: string;
     instructions: string;
     runtime_mode: RuntimeMode;
+    model: string | null;
     tools: string[];
     knowledge_base_ids?: string[];
   }) => request<AgentDefinition>("/agents", { method: "POST", body: JSON.stringify(payload) }),
@@ -165,7 +167,7 @@ export interface KnowledgeSearchResponse {
   results: KnowledgeCitation[];
 }
 
-export const eventTypes: EventType[] = [
+export const eventTypes: KnownEventType[] = [
   "run.started",
   "step.started",
   "llm.started",

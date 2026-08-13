@@ -15,7 +15,7 @@ export default defineConfig({
       timeout: 120_000,
     },
     {
-      command: "powershell -NoProfile -Command \"$env:API_PROXY_URL='http://127.0.0.1:8100'; pnpm dev --hostname 127.0.0.1 --port 3100\"",
+      command: "powershell -NoProfile -Command \"$env:API_PROXY_URL='http://127.0.0.1:8100'; pnpm dev --webpack --hostname 127.0.0.1 --port 3100\"",
       url: "http://127.0.0.1:3100",
       reuseExistingServer: false,
       timeout: 120_000,
