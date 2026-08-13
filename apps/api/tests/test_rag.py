@@ -12,6 +12,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.domain.contracts import (
     EmbeddingVector,
@@ -25,12 +27,13 @@ from app.domain.contracts import (
 from app.domain.errors import KnowledgeValidationError, ToolExecutionError, ToolPermissionError
 from app.knowledge.chunking import ChunkDraft
 from app.knowledge.embeddings import DeterministicEmbeddingProvider
-from app.knowledge.repository import KnowledgeRepository
+from app.knowledge.repository import KnowledgeRepository, StoredChunk, StoredDocument
 from app.knowledge.service import KnowledgeService, _validate_upload
-from app.knowledge.vector_store import SqlAlchemyVectorStore
+from app.knowledge.vector_store import PgVectorStore, SqlAlchemyVectorStore
+from app.knowledge.worker import LocalIngestionWorker
 from app.main import create_app
 from app.persistence.database import build_database, settings
-from app.persistence.models import Base, IngestionJobModel
+from app.persistence.models import Base, ChunkModel, EmbeddingModel, IngestionJobModel
 from app.tools.knowledge_search import (
     KnowledgeSearchInput,
     KnowledgeSearchTool,
@@ -68,6 +71,53 @@ class FailingUpsertVectorStore:
         return []
 
 
+class FailingActivationRepository(KnowledgeRepository):
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        super().__init__(sessions)
+        self.fail_next_activation = True
+        self.activation_attempted = False
+        self.staged_chunk_ids: list[UUID] = []
+
+    async def stage_chunks(
+        self, job_id: UUID, document: StoredDocument, drafts: list[ChunkDraft]
+    ) -> list[StoredChunk]:
+        chunks = await super().stage_chunks(job_id, document, drafts)
+        self.staged_chunk_ids = [chunk.id for chunk in chunks]
+        return chunks
+
+    async def activate_job(self, job_id: UUID) -> None:
+        self.activation_attempted = True
+        if self.fail_next_activation:
+            self.fail_next_activation = False
+            raise RuntimeError("simulated activation failure")
+        await super().activate_job(job_id)
+
+
+class RaisingAfterActivationRepository(KnowledgeRepository):
+    async def activate_job(self, job_id: UUID) -> None:
+        await super().activate_job(job_id)
+        raise RuntimeError("simulated lost activation acknowledgement")
+
+
+class BlockingEmbeddingProvider(DeterministicEmbeddingProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.active_calls = 0
+        self.max_active_calls = 0
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        self.active_calls += 1
+        self.max_active_calls = max(self.max_active_calls, self.active_calls)
+        self.entered.set()
+        try:
+            await self.release.wait()
+            return await super().embed(texts)
+        finally:
+            self.active_calls -= 1
+
+
 async def create_base(client: AsyncClient, name: str = "RAG benchmark") -> dict[str, object]:
     response = await client.post(
         "/knowledge-bases", json={"name": name, "description": "Small retrieval corpus"}
@@ -101,6 +151,17 @@ async def wait_for_job(client: AsyncClient, job_id: str, expected: str) -> dict[
             return job
         await asyncio.sleep(0.01)
     pytest.fail("ingestion did not reach a terminal state")
+
+
+async def wait_for_repository_job(
+    repository: KnowledgeRepository, job_id: UUID, terminal_states: set[str]
+) -> str:
+    for _ in range(300):
+        state = (await repository.get_job(job_id)).state.value
+        if state in terminal_states:
+            return state
+        await asyncio.sleep(0.01)
+    pytest.fail(f"ingestion job {job_id} did not reach {sorted(terminal_states)}")
 
 
 @pytest.mark.asyncio
@@ -296,6 +357,349 @@ async def test_failed_reingestion_preserves_last_completed_generation(tmp_path: 
     assert "successful-replacement-generation" in current.results[0].content
     assert "stable-completed-generation" not in current.results[0].content
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_activation_failure_is_terminal_and_preserves_previous_generation(
+    tmp_path: Path,
+) -> None:
+    engine, sessions = build_database(
+        f"sqlite+aiosqlite:///{(tmp_path / 'failed-activation.db').as_posix()}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    embeddings = DeterministicEmbeddingProvider()
+    repository = KnowledgeRepository(sessions)
+    vector_store = SqlAlchemyVectorStore(sessions)
+    service = KnowledgeService(
+        repository=repository,
+        vector_store=vector_store,
+        embeddings=embeddings,
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    service.bind_enqueue(lambda _job_id: None)
+    base = await service.create_base(
+        KnowledgeBaseCreate(name="Activation failure", description="Regression corpus")
+    )
+    accepted = await service.queue_upload(
+        base.id,
+        "versioned.txt",
+        "text/plain",
+        b"previous-completed-generation remains searchable",
+    )
+    await service.process_job(accepted.ingestion_job.id)
+    previous = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="previous-completed-generation", top_k=1),
+    )
+    previous_chunk_id = previous.results[0].chunk_id
+
+    stored_file = next((tmp_path / "knowledge").iterdir())
+    stored_file.write_bytes(b"activation-failure-generation must remain hidden")
+    async with sessions() as session:
+        replacement = IngestionJobModel(document_id=str(accepted.document.id), state="queued")
+        session.add(replacement)
+        await session.commit()
+        await session.refresh(replacement)
+        replacement_job_id = UUID(replacement.id)
+
+    failing_repository = FailingActivationRepository(sessions)
+    failing_service = KnowledgeService(
+        repository=failing_repository,
+        vector_store=vector_store,
+        embeddings=embeddings,
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    worker = LocalIngestionWorker(failing_service)
+    await worker.start()
+    try:
+        assert (
+            await wait_for_repository_job(
+                failing_repository, replacement_job_id, {"completed", "failed"}
+            )
+            == "failed"
+        )
+    finally:
+        await worker.stop()
+
+    assert failing_repository.activation_attempted
+    assert failing_repository.staged_chunk_ids
+    async with sessions() as session:
+        staged_chunk_count = await session.scalar(
+            select(func.count(ChunkModel.id)).where(
+                ChunkModel.ingestion_job_id == str(replacement_job_id)
+            )
+        )
+        staged_vector_count = await session.scalar(
+            select(func.count(EmbeddingModel.id)).where(
+                EmbeddingModel.chunk_id.in_(
+                    [str(chunk_id) for chunk_id in failing_repository.staged_chunk_ids]
+                )
+            )
+        )
+    assert staged_chunk_count == 0
+    assert staged_vector_count == 0
+
+    preserved = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="previous-completed-generation", top_k=3, hybrid=True),
+    )
+    assert preserved.results[0].chunk_id == previous_chunk_id
+    assert all("activation-failure-generation" not in item.content for item in preserved.results)
+
+    stored_file.write_bytes(b"reingestion-after-activation-failure succeeds")
+    async with sessions() as session:
+        retry = IngestionJobModel(document_id=str(accepted.document.id), state="queued")
+        session.add(retry)
+        await session.commit()
+        await session.refresh(retry)
+        retry_job_id = UUID(retry.id)
+    await service.process_job(retry_job_id)
+    retried = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="reingestion-after-activation-failure", top_k=1),
+    )
+    assert retried.results[0].chunk_id != previous_chunk_id
+    assert "reingestion-after-activation-failure" in retried.results[0].content
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_activation_cleanup_never_rewrites_an_already_completed_job(tmp_path: Path) -> None:
+    engine, sessions = build_database(
+        f"sqlite+aiosqlite:///{(tmp_path / 'ambiguous-activation.db').as_posix()}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    embeddings = DeterministicEmbeddingProvider()
+    repository = RaisingAfterActivationRepository(sessions)
+    vector_store = SqlAlchemyVectorStore(sessions)
+    service = KnowledgeService(
+        repository=repository,
+        vector_store=vector_store,
+        embeddings=embeddings,
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    service.bind_enqueue(lambda _job_id: None)
+    base = await service.create_base(
+        KnowledgeBaseCreate(name="Activation acknowledgement", description="Regression corpus")
+    )
+    accepted = await service.queue_upload(
+        base.id,
+        "committed.txt",
+        "text/plain",
+        b"committed-activation-generation remains available",
+    )
+
+    with pytest.raises(RuntimeError, match="lost activation acknowledgement"):
+        await service.process_job(accepted.ingestion_job.id)
+
+    assert (await repository.get_job(accepted.ingestion_job.id)).state.value == "completed"
+    result = await service.search(
+        [base.id], KnowledgeSearchRequest(query="committed-activation-generation", top_k=1)
+    )
+    assert result.results[0].document == "committed.txt"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_two_sqlite_workers_cannot_process_same_document_concurrently(
+    tmp_path: Path,
+) -> None:
+    engine, sessions = build_database(
+        f"sqlite+aiosqlite:///{(tmp_path / 'concurrent-jobs.db').as_posix()}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    repository = KnowledgeRepository(sessions)
+    vector_store = SqlAlchemyVectorStore(sessions)
+    stable_embeddings = DeterministicEmbeddingProvider()
+    stable_service = KnowledgeService(
+        repository=repository,
+        vector_store=vector_store,
+        embeddings=stable_embeddings,
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    stable_service.bind_enqueue(lambda _job_id: None)
+    base = await stable_service.create_base(
+        KnowledgeBaseCreate(name="Concurrent jobs", description="Regression corpus")
+    )
+    accepted = await stable_service.queue_upload(
+        base.id,
+        "concurrent.txt",
+        "text/plain",
+        b"stable-generation remains visible during replacement",
+    )
+    await stable_service.process_job(accepted.ingestion_job.id)
+    old_result = await stable_service.search(
+        [base.id], KnowledgeSearchRequest(query="stable-generation", top_k=1)
+    )
+    old_chunk_id = old_result.results[0].chunk_id
+
+    stored_file = next((tmp_path / "knowledge").iterdir())
+    stored_file.write_bytes(b"single-winning-concurrent-generation becomes searchable")
+    async with sessions() as session:
+        first = IngestionJobModel(document_id=str(accepted.document.id), state="queued")
+        second = IngestionJobModel(document_id=str(accepted.document.id), state="queued")
+        session.add_all([first, second])
+        await session.commit()
+        await session.refresh(first)
+        await session.refresh(second)
+        replacement_ids = [UUID(first.id), UUID(second.id)]
+
+    blocking_embeddings = BlockingEmbeddingProvider()
+    concurrent_service = KnowledgeService(
+        repository=repository,
+        vector_store=vector_store,
+        embeddings=blocking_embeddings,
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    worker = LocalIngestionWorker(concurrent_service, worker_count=2)
+    await worker.start()
+    try:
+        await asyncio.wait_for(blocking_embeddings.entered.wait(), timeout=2)
+        for _ in range(300):
+            states = [(await repository.get_job(job_id)).state.value for job_id in replacement_ids]
+            if "failed" in states or blocking_embeddings.max_active_calls > 1:
+                break
+            await asyncio.sleep(0.01)
+
+        during = await stable_service.search(
+            [base.id], KnowledgeSearchRequest(query="stable-generation", top_k=1, hybrid=True)
+        )
+        assert during.results[0].chunk_id == old_chunk_id
+        blocking_embeddings.release.set()
+        terminal_states = [
+            await wait_for_repository_job(repository, job_id, {"completed", "failed"})
+            for job_id in replacement_ids
+        ]
+    finally:
+        blocking_embeddings.release.set()
+        await worker.stop()
+
+    assert blocking_embeddings.max_active_calls == 1
+    assert sorted(terminal_states) == ["completed", "failed"]
+    completed_job_id = replacement_ids[terminal_states.index("completed")]
+    async with sessions() as session:
+        active_generations = list(
+            await session.scalars(
+                select(ChunkModel.ingestion_job_id).where(
+                    ChunkModel.document_id == str(accepted.document.id)
+                )
+            )
+        )
+    assert active_generations
+    assert set(active_generations) == {str(completed_job_id)}
+    assert (await repository.get_job(completed_job_id)).state.value == "completed"
+
+    final = await stable_service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="single-winning-concurrent-generation", top_k=1, hybrid=True),
+    )
+    assert final.results[0].chunk_id != old_chunk_id
+    assert "single-winning-concurrent-generation" in final.results[0].content
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_dirty_generation_is_invisible_to_every_retrieval_boundary(
+    tmp_path: Path,
+) -> None:
+    engine, sessions = build_database(
+        f"sqlite+aiosqlite:///{(tmp_path / 'dirty-failed.db').as_posix()}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    repository = KnowledgeRepository(sessions)
+    embeddings = DeterministicEmbeddingProvider()
+    vector_store = SqlAlchemyVectorStore(sessions)
+    service = KnowledgeService(
+        repository=repository,
+        vector_store=vector_store,
+        embeddings=embeddings,
+        storage_root=tmp_path / "knowledge",
+        max_file_bytes=1024,
+    )
+    base = await repository.create_base(
+        KnowledgeBaseCreate(name="Dirty failed data", description="Regression corpus"),
+        embeddings.name,
+        embeddings.model,
+    )
+    document, job = await repository.create_document_and_job(
+        base.id,
+        "dirty.txt",
+        "upload://dirty.txt",
+        "text/plain",
+        1,
+        tmp_path / "dirty.txt",
+    )
+    await repository.fail_job(job.id, "simulated cleanup failure")
+    dirty_content = "dirty-failed-exclusive-token must never become evidence"
+    dirty_vector = (await embeddings.embed([dirty_content]))[0]
+    async with sessions() as session:
+        dirty_chunk = ChunkModel(
+            knowledge_base_id=str(base.id),
+            document_id=str(document.id),
+            ingestion_job_id=str(job.id),
+            chunk_index=0,
+            content=dirty_content,
+            token_count=6,
+            metadata_json="{}",
+        )
+        session.add(dirty_chunk)
+        await session.flush()
+        session.add(
+            EmbeddingModel(
+                chunk_id=dirty_chunk.id,
+                provider=embeddings.name,
+                model=embeddings.model,
+                dimensions=len(dirty_vector),
+                vector_json=json.dumps(dirty_vector),
+                metadata_json="{}",
+            )
+        )
+        await session.commit()
+        dirty_chunk_id = UUID(dirty_chunk.id)
+
+    assert await repository.list_chunk_candidates([base.id], None) == []
+    assert await vector_store.search([base.id], dirty_vector, 5) == []
+    semantic = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="dirty-failed-exclusive-token", top_k=5, hybrid=False),
+    )
+    hybrid = await service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="dirty-failed-exclusive-token", top_k=5, hybrid=True),
+    )
+    assert semantic.results == []
+    assert hybrid.results == []
+    assert await repository.hydrate_matches(
+        [VectorMatch(chunk_id=dirty_chunk_id, score=1.0)]
+    ) == []
+    await engine.dispose()
+
+
+def test_pgvector_search_query_requires_completed_generation() -> None:
+    statement, params = PgVectorStore._build_search_query(
+        knowledge_base_ids=[UUID("00000000-0000-0000-0000-000000000001")],
+        query_vector=[1.0, 0.0],
+        top_k=3,
+        filters=None,
+    )
+    sql = str(statement)
+    assert "JOIN ingestion_jobs j ON j.id = c.ingestion_job_id" in sql
+    assert "j.state = :completed_state" in sql
+    assert "j.document_id = c.document_id" in sql
+    assert params["completed_state"] == "completed"
 
 
 @pytest.mark.asyncio

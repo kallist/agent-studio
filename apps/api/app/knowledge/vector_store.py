@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import bindparam, delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import TextClause
 
 from app.domain.contracts import EmbeddingVector, IngestionState, RetrievalFilters, VectorMatch
 from app.persistence.models import (
@@ -166,6 +167,22 @@ class PgVectorStore(SqlAlchemyVectorStore):
     ) -> list[VectorMatch]:
         if not knowledge_base_ids:
             return []
+        statement, params = self._build_search_query(
+            knowledge_base_ids, query_vector, top_k, filters
+        )
+        async with self._sessions() as session:
+            rows = (await session.execute(statement, params)).all()
+        return [
+            VectorMatch(chunk_id=UUID(chunk_id), score=float(score)) for chunk_id, score in rows
+        ]
+
+    @staticmethod
+    def _build_search_query(
+        knowledge_base_ids: list[UUID],
+        query_vector: list[float],
+        top_k: int,
+        filters: RetrievalFilters | None,
+    ) -> tuple[TextClause, dict[str, object]]:
         clauses = [
             "c.knowledge_base_id IN :knowledge_base_ids",
             "j.state = :completed_state",
@@ -200,11 +217,7 @@ class PgVectorStore(SqlAlchemyVectorStore):
             LIMIT :top_k
             """
         ).bindparams(bindparam("knowledge_base_ids", expanding=True))
-        async with self._sessions() as session:
-            rows = (await session.execute(statement, params)).all()
-        return [
-            VectorMatch(chunk_id=UUID(chunk_id), score=float(score)) for chunk_id, score in rows
-        ]
+        return statement, params
 
 
 def _cosine(left: list[float], right: list[float]) -> float:

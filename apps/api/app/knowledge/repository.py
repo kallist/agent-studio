@@ -6,8 +6,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from app.domain.contracts import (
     DocumentView,
@@ -167,36 +168,91 @@ class KnowledgeRepository:
 
     async def mark_processing(self, job_id: UUID) -> StoredDocument | None:
         async with self._sessions() as session:
+            if session.get_bind().dialect.name == "sqlite":
+                return await self._mark_processing_sqlite(session, job_id)
+            return await self._mark_processing_with_document_lock(session, job_id)
+
+    async def _mark_processing_sqlite(
+        self, session: AsyncSession, job_id: UUID
+    ) -> StoredDocument | None:
+        other_job = aliased(IngestionJobModel)
+        claimed_document_id = await session.scalar(
+            update(IngestionJobModel)
+            .where(IngestionJobModel.id == str(job_id))
+            .where(IngestionJobModel.state == IngestionState.QUEUED.value)
+            .where(
+                ~exists(
+                    select(other_job.id)
+                    .where(other_job.document_id == IngestionJobModel.document_id)
+                    .where(other_job.state == IngestionState.PROCESSING.value)
+                    .where(other_job.id != IngestionJobModel.id)
+                )
+            )
+            .values(
+                state=IngestionState.PROCESSING.value,
+                started_at=datetime.now(UTC),
+                completed_at=None,
+                error=None,
+            )
+            .returning(IngestionJobModel.document_id)
+        )
+        if claimed_document_id is None:
             job = await session.get(IngestionJobModel, str(job_id))
             if job is None:
                 raise EntityNotFoundError(f"Ingestion job '{job_id}' was not found.")
-            document = await session.scalar(
-                select(DocumentModel).where(DocumentModel.id == job.document_id).with_for_update()
-            )
-            if document is None:
-                raise EntityNotFoundError(f"Document '{job.document_id}' was not found.")
-            await session.refresh(job)
-            if job.state != IngestionState.QUEUED.value:
-                return None
-            active_job_id = await session.scalar(
-                select(IngestionJobModel.id)
-                .where(IngestionJobModel.document_id == job.document_id)
-                .where(IngestionJobModel.state == IngestionState.PROCESSING.value)
-                .where(IngestionJobModel.id != job.id)
-                .limit(1)
-            )
-            if active_job_id is not None:
-                job.state = IngestionState.FAILED.value
-                job.error = "Another ingestion job is already processing this document."
-                job.completed_at = datetime.now(UTC)
+            if job.state == IngestionState.QUEUED.value:
+                await session.execute(
+                    update(IngestionJobModel)
+                    .where(IngestionJobModel.id == str(job_id))
+                    .where(IngestionJobModel.state == IngestionState.QUEUED.value)
+                    .values(
+                        state=IngestionState.FAILED.value,
+                        error="Another ingestion job is already processing this document.",
+                        completed_at=datetime.now(UTC),
+                    )
+                )
                 await session.commit()
-                return None
-            job.state = IngestionState.PROCESSING.value
-            job.started_at = datetime.now(UTC)
-            job.completed_at = None
-            job.error = None
+            return None
+
+        document = await session.get(DocumentModel, claimed_document_id)
+        if document is None:
+            raise EntityNotFoundError(f"Document '{claimed_document_id}' was not found.")
+        await session.commit()
+        return _stored_document(document)
+
+    async def _mark_processing_with_document_lock(
+        self, session: AsyncSession, job_id: UUID
+    ) -> StoredDocument | None:
+        job = await session.get(IngestionJobModel, str(job_id))
+        if job is None:
+            raise EntityNotFoundError(f"Ingestion job '{job_id}' was not found.")
+        document = await session.scalar(
+            select(DocumentModel).where(DocumentModel.id == job.document_id).with_for_update()
+        )
+        if document is None:
+            raise EntityNotFoundError(f"Document '{job.document_id}' was not found.")
+        await session.refresh(job)
+        if job.state != IngestionState.QUEUED.value:
+            return None
+        active_job_id = await session.scalar(
+            select(IngestionJobModel.id)
+            .where(IngestionJobModel.document_id == job.document_id)
+            .where(IngestionJobModel.state == IngestionState.PROCESSING.value)
+            .where(IngestionJobModel.id != job.id)
+            .limit(1)
+        )
+        if active_job_id is not None:
+            job.state = IngestionState.FAILED.value
+            job.error = "Another ingestion job is already processing this document."
+            job.completed_at = datetime.now(UTC)
             await session.commit()
-            return _stored_document(document)
+            return None
+        job.state = IngestionState.PROCESSING.value
+        job.started_at = datetime.now(UTC)
+        job.completed_at = None
+        job.error = None
+        await session.commit()
+        return _stored_document(document)
 
     async def stage_chunks(
         self, job_id: UUID, document: StoredDocument, drafts: list[ChunkDraft]
@@ -280,12 +336,18 @@ class KnowledgeRepository:
             job.completed_at = datetime.now(UTC)
             await session.commit()
 
-    async def fail_job(self, job_id: UUID, error: str) -> None:
+    async def fail_job(self, job_id: UUID, error: str) -> list[UUID] | None:
         async with self._sessions() as session:
             job = await session.get(IngestionJobModel, str(job_id))
             if job is None:
                 raise EntityNotFoundError(f"Ingestion job '{job_id}' was not found.")
+            if job.state not in {
+                IngestionState.QUEUED.value,
+                IngestionState.PROCESSING.value,
+            }:
+                return None
             staged_ids = select(ChunkModel.id).where(ChunkModel.ingestion_job_id == str(job_id))
+            chunk_ids = list(await session.scalars(staged_ids))
             await session.execute(
                 delete(EmbeddingModel).where(EmbeddingModel.chunk_id.in_(staged_ids))
             )
@@ -296,6 +358,7 @@ class KnowledgeRepository:
             job.error = error
             job.completed_at = datetime.now(UTC)
             await session.commit()
+            return [UUID(chunk_id) for chunk_id in chunk_ids]
 
     async def list_chunk_candidates(
         self, knowledge_base_ids: list[UUID], filters: RetrievalFilters | None

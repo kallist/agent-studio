@@ -25,10 +25,10 @@ Agents persist attached knowledge-base IDs and enable the stable tool name `know
 2. It validates filename, extension, reported MIME, content signature/encoding, and size.
 3. It writes to a generated UUID path under `KNOWLEDGE_STORAGE_PATH` and creates a `Document` plus `queued` job.
 4. The API returns HTTP 202 immediately.
-5. A bounded in-process worker claims the queued job, parses, chunks, and computes embeddings.
+5. A bounded in-process worker claims the queued job, parses, chunks, and computes embeddings. PostgreSQL serializes claims with a document row lock; SQLite uses one conditional `UPDATE ... RETURNING` claim so concurrent local workers cannot both own the same document.
 6. New chunks are staged under that job generation and remain invisible while vectors are upserted.
 7. One database transaction activates the generation: it removes the prior completed generation, normalizes chunk order, and marks the job `completed`.
-8. Parser/provider/vector/storage failure marks only the current job `failed` and discards only its staged chunks/vectors. A previous completed generation remains available.
+8. Parsing, embedding, staging, vector upsert, and activation share one orchestration failure boundary. A failure marks only the current queued/processing job `failed`, then removes that generation's staged vectors; terminal jobs are never rewritten by cleanup. A previous completed generation remains available.
 9. On process startup, abandoned `processing` jobs return to `queued`; retry replaces that job's hidden staging data before activation. Duplicate delivery of a terminal job is an idempotent no-op, and two jobs for one document are not allowed to process concurrently.
 
 Retrieval independently joins every semantic, lexical, and citation-hydration candidate to its owning ingestion job and requires `completed`. This is the second integrity boundary: staged, queued, processing, failed, legacy-ambiguous, and orphaned vector records cannot become citations even if cleanup is interrupted.
@@ -119,7 +119,9 @@ Both `MockRuntime` and `AgentsSdkRuntime` use the hardened application-owned `Ag
 - vector-write failure after chunk generation with no retrieval result or tool citation;
 - failed replacement preserving the last completed generation;
 - hidden staged data across a simulated worker crash and successful restart recovery;
-- terminal duplicate delivery and concurrent duplicate-job protection;
+- activation failure after successful vector upsert, worker terminal handling, old-generation preservation, cleanup, and subsequent successful re-ingestion;
+- terminal duplicate delivery and true two-worker SQLite duplicate-job protection;
+- deliberately retained failed chunk/vector rows remaining invisible to lexical, semantic, hybrid, and citation hydration;
 - HTTP-boundary oversized-file rejection;
 - recovery of both queued and abandoned processing jobs without accumulating duplicate chunks;
 - the concrete `knowledge_search` schema, permission, timeout, output-limit, and error contract;
@@ -139,11 +141,11 @@ This is a regression benchmark, not a statistically meaningful retrieval evaluat
 
 ## Limitations and next steps
 
-- The local worker is process-local. Multiple API replicas still need a durable broker with cross-process leases and idempotency; the current document-row serialization protects one shared database but does not replace broker delivery guarantees.
+- The local worker is process-local. Within one shared database, PostgreSQL document-row locking and the SQLite atomic conditional claim prevent two workers from processing one document concurrently. Multiple API replicas still need a durable broker with delivery guarantees, bounded retries, and operational reconciliation.
 - Local file storage is not shared or transactional with the database. Production should use object storage plus cleanup/reconciliation jobs.
 - SQLite cosine search loads candidate vectors into the API process and is intended only for local/demo scale.
-- The pgvector adapter has no ANN index yet. Add HNSW/IVFFlat only after corpus and latency measurements justify it.
-- The pre-Alembic startup migration only bridges the newly added agent attachment column. Establish Alembic before further production schema evolution.
+- The pgvector adapter has no ANN index yet. Its completed-generation SQL predicate has a construction-level regression test, but a live PostgreSQL/pgvector integration was not added by this fix. Add HNSW/IVFFlat only after corpus and latency measurements justify it.
+- The pre-Alembic startup migration bridges the agent attachment column and adds/backfills `chunks.ingestion_job_id`. Legacy chunks are exposed only when the newest known job completed; ambiguous failed/processing replacements remain hidden. Establish Alembic before further production schema evolution.
 - There is no OCR, table-aware PDF parsing, deduplication, public document deletion/re-ingestion endpoint, or tenant authorization yet. The generation model and tests cover replacement consistency before that endpoint is introduced.
 - Hybrid lexical scoring is simple overlap rather than BM25 and uses fixed weights.
 - OpenAI embedding batching has no retry/rate-limit policy yet; a production queue should add bounded retries and dead-letter handling.

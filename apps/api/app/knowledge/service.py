@@ -139,19 +139,21 @@ class KnowledgeService:
                     for chunk, vector in zip(staged_chunks, vectors, strict=True)
                 ]
             )
-        except DocumentParsingError as exc:
-            await self._repository.fail_job(job_id, str(exc)[:1_000])
-        except Exception:
-            try:
-                await self._vector_store.delete_chunks([chunk.id for chunk in staged_chunks])
-            finally:
-                await self._repository.fail_job(
-                    job_id,
-                    "Ingestion failed. Check server logs for parser or embedding errors.",
-                )
-            raise
-        else:
             await self._repository.activate_job(job_id)
+        except DocumentParsingError as exc:
+            await self._fail_ingestion(job_id, str(exc)[:1_000])
+        except Exception:
+            await self._fail_ingestion(
+                job_id,
+                "Ingestion failed. Check server logs for parser, embedding, vector, or "
+                "activation errors.",
+            )
+            raise
+
+    async def _fail_ingestion(self, job_id: UUID, error: str) -> None:
+        cleanup_ids = await self._repository.fail_job(job_id, error)
+        if cleanup_ids is not None:
+            await self._vector_store.delete_chunks(cleanup_ids)
 
     async def search(
         self,
