@@ -173,6 +173,13 @@ class IngestionJobModel(Base):
 
 class MemoryModel(Base):
     __tablename__ = "memories"
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id",
+            "normalized_key",
+            name="uq_memories_agent_normalized_key",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
@@ -181,6 +188,7 @@ class MemoryModel(Base):
     )
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_key: Mapped[str] = mapped_column(String(64), nullable=False)
     importance: Mapped[float] = mapped_column(Float, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

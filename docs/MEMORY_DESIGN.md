@@ -49,8 +49,8 @@ The retriever loads records through `MemoryStore` and applies `MemoryPolicy.rank
 4. A `memory.retrieved` trace event records record IDs and the relevance, recency, importance, and final scores. Memory contents are not duplicated into trace payloads.
 5. The runtime receives conversation, working, and selected long-term memory in an application-owned snapshot.
 6. The OpenAI adapter keeps selected facts in the serialized `AgentContext.memory` data field. Trusted agent instructions contain only the boundary rule that this field is untrusted user data; fact text is never concatenated into those instructions.
-7. After successful runtime completion, the write policy may propose one long-term fact. The store commits it and `memory.written` records its ID, importance, expiration, and write reason.
-8. Failed runs do not write long-term memory.
+7. After successful runtime completion, the write policy may propose one long-term fact. A single database transaction conditionally upserts it only when the agent's current persisted setting is enabled, appends `memory.written`, and persists `run.completed` plus the terminal run state.
+8. If any part of that completion transaction fails, the memory write, memory event, and terminal transition roll back together. Failed runs do not write long-term memory.
 
 Writing happens before the terminal run event. Therefore a client that receives `run.completed` can immediately refresh the memory list and see committed data.
 
@@ -72,7 +72,7 @@ The policy rejects:
 - writes from failed runs;
 - every write while the agent's memory setting is disabled.
 
-An identical active fact for the same agent is refreshed instead of duplicated. v1 does not use a model to infer or summarize memories, avoiding opaque writes and an API-key dependency in tests.
+Content is normalized with Unicode NFKC, case folding, and whitespace collapsing, then hashed with SHA-256. `(agent_id, normalized_key)` is database-unique, and writes use an atomic upsert, so concurrent runs cannot create duplicate facts for one agent. A repeated fact refreshes its timestamps and source while retaining the greatest importance. v1 does not use a model to infer or summarize memories, avoiding opaque writes and an API-key dependency in tests.
 
 ## Retrieval policy
 
@@ -93,7 +93,7 @@ recency = 1 / (1 + age_days / 30)
 score = 0.50 * relevance + 0.30 * importance + 0.20 * recency
 ```
 
-The retriever returns at most five records and at most 1,500 content characters. Ties are deterministic: score, creation time, then record ID. These values are policy configuration, not hidden model behavior.
+The retriever returns at most five records and at most 1,500 content characters. Every record, including the first ranked record, must fit the remaining budget; oversized records are deterministically skipped rather than truncated. Ties are deterministic: score, creation time, then record ID. These values are policy configuration, not hidden model behavior.
 
 Known limitation: lexical retrieval does not understand synonyms or semantic equivalence. A future embedding implementation can replace the relevance component behind the same retriever/store boundaries, but it must retain the relevance gate, agent isolation, audit fields, and deterministic no-key test adapter.
 
@@ -103,7 +103,7 @@ Known limitation: lexical retrieval does not understand synonyms or semantic equ
 - Listing or retrieving memory physically purges records whose expiration time has passed.
 - The API exposes physical deletion by both agent ID and memory ID. Supplying another agent's memory ID returns not found and cannot delete across agents.
 - Deleted or expired memory is absent from later retrieval and therefore from prompts.
-- Disabling memory does not silently delete existing records. It stops both retrieval and writes. Re-enabling resumes access to records that have not expired or been deleted.
+- Disabling memory does not silently delete existing records. It stops both retrieval and writes. The write gate is part of the same database statement as the upsert, so a run-start snapshot cannot authorize a later write and there is no check-then-insert gap. Re-enabling resumes access to records that have not expired or been deleted.
 
 ## API and UI
 
@@ -135,5 +135,10 @@ The backend suite verifies:
 - expired records are excluded;
 - ordinary and sensitive inputs are not written;
 - retrieval trace events expose all score components.
+- disabling during an in-flight run prevents both the durable write and `memory.written` event;
+- terminal persistence failure rolls back the memory write;
+- concurrent equivalent writes deduplicate through the database constraint;
+- fixed-clock ranking covers relevance, importance, recency, threshold, ties, result limit, and context budget;
+- a combined RAG/Memory run preserves retrieval, `knowledge_search`, citations, memory write, and normalized event order.
 
 The frontend component test verifies that saved facts render and that delete and disable controls invoke their handlers.

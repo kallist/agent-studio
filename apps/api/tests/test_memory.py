@@ -3,16 +3,30 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import IntegrityError
 
+from app.domain.contracts import (
+    AgentCreate,
+    AgentEvent,
+    AgentRun,
+    CancellationToken,
+    EventSink,
+    RunStatus,
+    RuntimeInput,
+    RuntimeMode,
+)
+from app.main import create_app
 from app.memory.contracts import MemoryKind, MemoryRecord
 from app.memory.policy import MemoryPolicy
 from app.memory.store import SqlAlchemyMemoryStore
-from app.persistence.database import build_database
+from app.persistence.database import build_database, settings
 from app.persistence.models import Base
+from app.persistence.repositories import Repositories
+from app.runtime.mock import MockRuntime
 
 
 async def create_agent(client: AsyncClient, name: str) -> dict[str, object]:
@@ -52,6 +66,27 @@ async def event_types(client: AsyncClient, run_id: object) -> list[str]:
     response = await client.get(f"/runs/{run_id}/events")
     assert response.status_code == 200
     return [event["type"] for event in response.json()]
+
+
+class PausingRuntime:
+    def __init__(self, delegate: MockRuntime) -> None:
+        self._delegate = delegate
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def run(
+        self,
+        runtime_input: RuntimeInput,
+        emit: EventSink,
+        cancellation: CancellationToken | None = None,
+    ) -> AgentRun:
+        self.started.set()
+        await self.release.wait()
+        return await self._delegate.run(runtime_input, emit, cancellation)
 
 
 @pytest.mark.asyncio
@@ -118,6 +153,56 @@ async def test_memory_disabled_prevents_writes(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_disabling_memory_during_run_prevents_atomic_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    app = create_app(
+        f"sqlite+aiosqlite:///{(tmp_path / 'disable-race.db').as_posix()}",
+        str(tmp_path / "knowledge"),
+    )
+    async with app.router.lifespan_context(app):
+        service = app.state.agent_service
+        original_runtime = service._runtimes[RuntimeMode.MOCK]
+        assert isinstance(original_runtime, MockRuntime)
+        runtime = PausingRuntime(original_runtime)
+        service._runtimes[RuntimeMode.MOCK] = runtime
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+            agent = await create_agent(http, "Disable Race Agent")
+            accepted = await http.post(
+                f"/agents/{agent['id']}/runs",
+                json={"input": "Remember that project codename is Atlas."},
+            )
+            assert accepted.status_code == 202
+            await asyncio.wait_for(runtime.started.wait(), timeout=2)
+            disabled = await http.patch(
+                f"/agents/{agent['id']}/memory-settings", json={"enabled": False}
+            )
+            assert disabled.status_code == 200
+            runtime.release.set()
+            run = await run_result(http, accepted.json()["id"])
+
+            assert run["status"] == "completed"
+            assert (await http.get(f"/agents/{agent['id']}/memories")).json() == []
+            assert "memory.written" not in await event_types(http, run["id"])
+
+
+@pytest.mark.asyncio
+async def test_enabled_memory_and_terminal_state_commit_together(client: AsyncClient) -> None:
+    agent = await create_agent(client, "Atomic Success Agent")
+    run = await run_to_completion(
+        client, agent["id"], "Remember that project codename is Atlas."
+    )
+
+    assert run["status"] == "completed"
+    assert len((await client.get(f"/agents/{agent['id']}/memories")).json()) == 1
+    assert (await event_types(client, run["id"]))[-2:] == [
+        "memory.written",
+        "run.completed",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_memory_is_isolated_between_agents(client: AsyncClient) -> None:
     first_agent = await create_agent(client, "First Agent")
     second_agent = await create_agent(client, "Second Agent")
@@ -160,6 +245,86 @@ async def test_expired_memory_is_physically_purged(tmp_path: Path) -> None:
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_terminal_event_failure_rolls_back_memory_and_run_completion(
+    tmp_path: Path,
+) -> None:
+    engine, sessions = build_database(
+        f"sqlite+aiosqlite:///{(tmp_path / 'atomic-rollback.db').as_posix()}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    repositories = Repositories(sessions)
+    store = SqlAlchemyMemoryStore(sessions)
+    agent = await repositories.create_agent(
+        AgentCreate(name="Rollback Agent", instructions="Remember facts.", tools=[])
+    )
+    run = await repositories.create_run(agent.id, "Remember that project codename is Atlas.")
+    await repositories.update_run(run.id, RunStatus.RUNNING)
+    existing_event = AgentEvent(run_id=run.id, sequence=1, type="run.started")
+    await repositories.append_event(existing_event)
+    candidate = MemoryPolicy().propose_write(
+        agent_id=agent.id,
+        run_id=run.id,
+        user_input=run.input,
+        now=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    assert candidate is not None
+
+    with pytest.raises(IntegrityError):
+        await repositories.finish_completed_run_with_memory(
+            run.id,
+            agent.id,
+            AgentEvent(
+                event_id=existing_event.event_id,
+                run_id=run.id,
+                sequence=2,
+                type="run.completed",
+            ),
+            output="done",
+            candidate=candidate,
+        )
+
+    assert await store.list(agent.id) == []
+    assert (await repositories.get_run(run.id)).status == RunStatus.RUNNING
+    assert [event.type for event in await repositories.list_events(run.id)] == ["run.started"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_writes_upsert_one_agent_scoped_memory(
+    tmp_path: Path,
+) -> None:
+    engine, sessions = build_database(
+        f"sqlite+aiosqlite:///{(tmp_path / 'memory-dedupe.db').as_posix()}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    store = SqlAlchemyMemoryStore(sessions)
+    agent_id = uuid4()
+    created_at = datetime(2026, 8, 1, tzinfo=UTC)
+    contents = ["Project   Codename is Ａtlas", "project codename is Atlas"]
+    records = [
+        MemoryRecord(
+            id=UUID(int=index + 1),
+            agent_id=agent_id,
+            kind=MemoryKind.LONG_TERM,
+            content=contents[index],
+            importance=0.9,
+            created_at=created_at,
+            expires_at=created_at + timedelta(days=180),
+        )
+        for index in range(2)
+    ]
+
+    stored = await asyncio.gather(*(store.write(record) for record in records))
+
+    memories = await store.list(agent_id)
+    assert len(memories) == 1
+    assert stored[0].id == stored[1].id == memories[0].id
+    await engine.dispose()
+
+
 def test_policy_excludes_expired_unrelated_and_sensitive_records() -> None:
     policy = MemoryPolicy()
     now = datetime.now(UTC)
@@ -191,3 +356,88 @@ def test_policy_excludes_expired_unrelated_and_sensitive_records() -> None:
         )
         is None
     )
+
+
+def test_ranking_components_threshold_ties_limits_and_context_budget() -> None:
+    now = datetime(2026, 1, 31, tzinfo=UTC)
+    agent_id = UUID(int=100)
+
+    def record(
+        identifier: int,
+        content: str,
+        *,
+        importance: float = 0.5,
+        age_days: int = 0,
+    ) -> MemoryRecord:
+        return MemoryRecord(
+            id=UUID(int=identifier),
+            agent_id=agent_id,
+            kind=MemoryKind.LONG_TERM,
+            content=content,
+            importance=importance,
+            created_at=now - timedelta(days=age_days),
+            expires_at=now + timedelta(days=180),
+        )
+
+    relevance = MemoryPolicy().rank(
+        "alpha beta gamma delta",
+        [record(1, "alpha beta gamma"), record(2, "alpha unrelated words")],
+        now=now,
+    )
+    assert [match.record.id for match in relevance] == [UUID(int=1), UUID(int=2)]
+
+    importance = MemoryPolicy().rank(
+        "alpha",
+        [record(1, "alpha", importance=0.2), record(2, "alpha", importance=0.9)],
+        now=now,
+    )
+    assert importance[0].record.id == UUID(int=2)
+
+    recency = MemoryPolicy().rank(
+        "alpha",
+        [record(1, "alpha", age_days=30), record(2, "alpha", age_days=0)],
+        now=now,
+    )
+    assert recency[0].record.id == UUID(int=2)
+
+    threshold = MemoryPolicy().rank(
+        "alpha beta gamma delta",
+        [record(1, "alpha one two three"), record(2, "alpha one two three four")],
+        now=now,
+    )
+    assert [match.record.id for match in threshold] == [UUID(int=1)]
+    assert threshold[0].relevance == 0.25
+
+    ties = MemoryPolicy().rank(
+        "alpha", [record(1, "alpha"), record(2, "alpha")], now=now
+    )
+    assert [match.record.id for match in ties] == [UUID(int=2), UUID(int=1)]
+
+    limited = MemoryPolicy(max_results=2).rank(
+        "alpha", [record(index, "alpha") for index in range(1, 5)], now=now
+    )
+    assert len(limited) == 2
+
+    oversized = "alpha " + ("x" * 1495)
+    budgeted = MemoryPolicy(max_context_chars=1_500).rank(
+        "alpha",
+        [
+            record(2, oversized, importance=1),
+            record(1, "alpha", importance=0.5),
+        ],
+        now=now,
+    )
+    assert [match.record.id for match in budgeted] == [UUID(int=1)]
+    assert len(oversized) == 1_501
+    assert sum(len(match.record.content) for match in budgeted) <= 1_500
+
+
+async def run_result(client: AsyncClient, run_id: object) -> dict[str, object]:
+    for _ in range(100):
+        response = await client.get(f"/runs/{run_id}")
+        assert response.status_code == 200
+        run = response.json()
+        if run["status"] in {"completed", "failed", "cancelled"}:
+            return run
+        await asyncio.sleep(0.01)
+    pytest.fail("run did not reach a terminal status")

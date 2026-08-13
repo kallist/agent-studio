@@ -1157,13 +1157,21 @@ async def test_agent_memory_and_knowledge_search_coexist(client: AsyncClient) ->
     )
     assert any(event["type"] == "memory.written" for event in first_events)
 
-    _, second_events = await run("What is the project codename?")
-    assert any(event["type"] == "memory.retrieved" for event in second_events)
-    assert any(
-        event["type"] == "tool.completed" and event["payload"]["tool"] == "knowledge_search"
-        for event in second_events
+    _, second_events = await run(
+        "Remember that project codename is Atlas and deployment region is east."
     )
-    assert second_events[-1]["type"] == "run.completed"
+    event_types = [event["type"] for event in second_events]
+    knowledge_result = next(
+        event
+        for event in second_events
+        if event["type"] == "tool.completed"
+        and event["payload"]["tool"] == "knowledge_search"
+    )
+    assert knowledge_result["payload"]["result"]["results"][0]["chunk_id"]
+    assert event_types.index("memory.retrieved") < event_types.index("tool.selected")
+    assert event_types.index("tool.selected") < event_types.index("tool.completed")
+    assert event_types.index("tool.completed") < event_types.index("memory.written")
+    assert event_types.index("memory.written") < event_types.index("run.completed")
 
 
 def test_knowledge_search_tool_declares_hardened_contract() -> None:

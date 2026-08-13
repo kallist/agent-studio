@@ -18,7 +18,8 @@ from app.domain.contracts import (
     RuntimeMode,
 )
 from app.domain.errors import EntityNotFoundError
-from app.memory.contracts import MemorySettings
+from app.memory.contracts import MemoryRecord, MemorySettings
+from app.memory.store import upsert_memory
 from app.persistence.models import (
     AgentMemorySettingModel,
     AgentModel,
@@ -207,6 +208,58 @@ class Repositories:
             model.updated_at = datetime.now(UTC)
             session.add(_event_model(event))
             await session.commit()
+
+    async def finish_completed_run_with_memory(
+        self,
+        run_id: UUID,
+        agent_id: UUID,
+        terminal_event: AgentEvent,
+        *,
+        output: str,
+        candidate: MemoryRecord,
+    ) -> list[AgentEvent]:
+        """Atomically gate/write memory, persist its event, and complete the run."""
+
+        async with self._sessions() as session, session.begin():
+            run = await session.get(RunModel, str(run_id))
+            if run is None:
+                raise EntityNotFoundError(f"Run '{run_id}' was not found.")
+            if run.agent_id != str(agent_id):
+                raise ValueError("Run and memory candidate belong to different agents.")
+
+            stored = await upsert_memory(session, candidate, require_enabled=True)
+            persisted_events: list[AgentEvent] = []
+            normalized_terminal = terminal_event
+            if stored is not None:
+                memory_event = AgentEvent(
+                    run_id=run_id,
+                    sequence=terminal_event.sequence,
+                    type="memory.written",
+                    payload={
+                        "memory_id": str(stored.id),
+                        "importance": stored.importance,
+                        "expires_at": (
+                            stored.expires_at.isoformat()
+                            if stored.expires_at is not None
+                            else None
+                        ),
+                        "write_reason": stored.metadata.get("write_reason"),
+                    },
+                )
+                persisted_events.append(memory_event)
+                normalized_terminal = terminal_event.model_copy(
+                    update={"sequence": terminal_event.sequence + 1}
+                )
+
+            run.status = RunStatus.COMPLETED.value
+            run.output = output
+            run.error = None
+            run.updated_at = datetime.now(UTC)
+            for event in [*persisted_events, normalized_terminal]:
+                session.add(_event_model(event))
+            await session.flush()
+            persisted_events.append(normalized_terminal)
+            return persisted_events
 
     async def list_events(self, run_id: UUID, after_sequence: int = 0) -> list[AgentEvent]:
         async with self._sessions() as session:

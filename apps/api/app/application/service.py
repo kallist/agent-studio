@@ -233,31 +233,6 @@ class AgentService:
                 emit,
                 cancellation,
             )
-            if agent.memory_enabled and output.termination_reason == TerminationReason.COMPLETED:
-                candidate = self._memory_policy.propose_write(
-                    agent_id=agent.id,
-                    run_id=run.id,
-                    user_input=run.input,
-                )
-                if candidate is not None:
-                    stored = await self._memory_store.write(candidate)
-                    await emit(
-                        AgentEvent(
-                            run_id=run.id,
-                            sequence=0,
-                            type="memory.written",
-                            payload={
-                                "memory_id": str(stored.id),
-                                "importance": stored.importance,
-                                "expires_at": (
-                                    stored.expires_at.isoformat()
-                                    if stored.expires_at is not None
-                                    else None
-                                ),
-                                "write_reason": stored.metadata.get("write_reason"),
-                            },
-                        )
-                    )
         except AgentStudioError as exc:
             message = str(exc)
             await finish(
@@ -291,6 +266,48 @@ class AgentService:
             if output.termination_reason == TerminationReason.COMPLETED:
                 final_output = output.final_output or ""
                 terminal_payload["final_output"] = final_output
+                candidate = self._memory_policy.propose_write(
+                    agent_id=agent.id,
+                    run_id=run.id,
+                    user_input=run.input,
+                )
+                if candidate is not None:
+                    try:
+                        committed_events = (
+                            await self._repositories.finish_completed_run_with_memory(
+                                run.id,
+                                agent.id,
+                                AgentEvent(
+                                    run_id=run.id,
+                                    sequence=sequence + 1,
+                                    type="run.completed",
+                                    payload=terminal_payload,
+                                ),
+                                output=final_output,
+                                candidate=candidate,
+                            )
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Atomic memory/run completion failed.",
+                            extra={"run_id": str(run.id)},
+                        )
+                        message = "Run completion could not be persisted."
+                        await finish(
+                            RunStatus.FAILED,
+                            AgentEvent(
+                                run_id=run.id,
+                                sequence=0,
+                                type="run.failed",
+                                payload={"error": message},
+                            ),
+                            error=message,
+                        )
+                        return
+                    sequence = committed_events[-1].sequence
+                    for committed_event in committed_events:
+                        await self._broker.publish(committed_event)
+                    return
                 await finish(
                     RunStatus.COMPLETED,
                     AgentEvent(

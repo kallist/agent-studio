@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, literal, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.memory.contracts import MemoryKind, MemoryRecord
-from app.persistence.models import MemoryModel
+from app.memory.keys import normalized_memory_key
+from app.persistence.models import AgentMemorySettingModel, MemoryModel
 
 
 def _aware(value: datetime) -> datetime:
@@ -29,48 +33,89 @@ def _to_record(model: MemoryModel) -> MemoryRecord:
     )
 
 
+async def upsert_memory(
+    session: AsyncSession,
+    record: MemoryRecord,
+    *,
+    require_enabled: bool = False,
+) -> MemoryRecord | None:
+    """Atomically deduplicate a memory, optionally gated by its current DB setting."""
+
+    if record.kind is not MemoryKind.LONG_TERM:
+        raise ValueError("Only long-term memory can be persisted.")
+
+    dialect = session.get_bind().dialect.name
+    statement: Any
+    if dialect == "sqlite":
+        statement = sqlite_insert(MemoryModel)
+    elif dialect == "postgresql":
+        statement = postgresql_insert(MemoryModel)
+    else:
+        raise RuntimeError(f"Memory upsert does not support database dialect '{dialect}'.")
+
+    normalized_key = normalized_memory_key(record.content)
+    values = {
+        "id": str(record.id),
+        "agent_id": str(record.agent_id),
+        "source_run_id": (
+            str(record.source_run_id) if record.source_run_id is not None else None
+        ),
+        "kind": record.kind.value,
+        "content": record.content,
+        "normalized_key": normalized_key,
+        "importance": record.importance,
+        "created_at": record.created_at,
+        "expires_at": record.expires_at,
+        "metadata_json": json.dumps(record.metadata, ensure_ascii=False),
+    }
+    if require_enabled:
+        columns = list(values)
+        source = (
+            select(*(literal(values[column]).label(column) for column in columns))
+            .select_from(AgentMemorySettingModel)
+            .where(
+                AgentMemorySettingModel.agent_id == str(record.agent_id),
+                AgentMemorySettingModel.enabled.is_(True),
+            )
+        )
+        statement = statement.from_select(columns, source)
+    else:
+        statement = statement.values(**values)
+
+    excluded = statement.excluded
+    statement = statement.on_conflict_do_update(
+        index_elements=[MemoryModel.agent_id, MemoryModel.normalized_key],
+        set_={
+            "source_run_id": excluded.source_run_id,
+            "content": excluded.content,
+            "importance": case(
+                (excluded.importance > MemoryModel.importance, excluded.importance),
+                else_=MemoryModel.importance,
+            ),
+            "created_at": excluded.created_at,
+            "expires_at": excluded.expires_at,
+            "metadata_json": excluded.metadata_json,
+        },
+    ).returning(MemoryModel.id)
+    stored_id = (await session.execute(statement)).scalar_one_or_none()
+    if stored_id is None:
+        return None
+    stored = await session.get(MemoryModel, stored_id)
+    if stored is None:
+        raise RuntimeError("Memory upsert did not return a persisted record.")
+    return _to_record(stored)
+
+
 class SqlAlchemyMemoryStore:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
     async def write(self, record: MemoryRecord) -> MemoryRecord:
-        if record.kind is not MemoryKind.LONG_TERM:
-            raise ValueError("Only long-term memory can be persisted.")
-        async with self._sessions() as session:
-            existing = await session.scalar(
-                select(MemoryModel).where(
-                    MemoryModel.agent_id == str(record.agent_id),
-                    func.lower(MemoryModel.content) == record.content.casefold(),
-                    MemoryModel.expires_at > record.created_at,
-                )
-            )
-            if existing is not None:
-                existing.importance = max(existing.importance, record.importance)
-                existing.expires_at = record.expires_at
-                existing.source_run_id = (
-                    str(record.source_run_id) if record.source_run_id is not None else None
-                )
-                await session.commit()
-                await session.refresh(existing)
-                return _to_record(existing)
-
-            model = MemoryModel(
-                id=str(record.id),
-                agent_id=str(record.agent_id),
-                source_run_id=(
-                    str(record.source_run_id) if record.source_run_id is not None else None
-                ),
-                kind=record.kind.value,
-                content=record.content,
-                importance=record.importance,
-                created_at=record.created_at,
-                expires_at=record.expires_at,
-                metadata_json=json.dumps(record.metadata, ensure_ascii=False),
-            )
-            session.add(model)
-            await session.commit()
-            await session.refresh(model)
-            return _to_record(model)
+        async with self._sessions() as session, session.begin():
+            stored = await upsert_memory(session, record)
+            if stored is None:
+                raise RuntimeError("Unconditional memory upsert was unexpectedly skipped.")
+            return stored
 
     async def list(self, agent_id: UUID) -> list[MemoryRecord]:
         now = datetime.now(UTC)

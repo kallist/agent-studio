@@ -160,7 +160,7 @@ class MemoryPolicy:
             if len(selected) >= self.max_results:
                 break
             content_size = len(match.record.content)
-            if selected and used_chars + content_size > self.max_context_chars:
+            if used_chars + content_size > self.max_context_chars:
                 continue
             selected.append(match)
             used_chars += content_size
