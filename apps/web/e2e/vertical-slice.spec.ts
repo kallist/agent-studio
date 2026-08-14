@@ -131,6 +131,44 @@ test("combines durable memory with knowledge search across deterministic runs", 
   await expect(citation).toBeVisible();
   await citation.click();
   await expect(page.locator(".trace-citations").getByText(/upload:\/\/security_policy\.txt/).first()).toBeVisible();
+  await expect(page.locator(".chat-message.agent .agent-answer p")).toHaveText(/\S/);
+  await expect(page.locator(".trace-panel").getByText("Final answer", { exact: true })).toBeVisible();
+
+  const runId = new URL(page.url()).searchParams.get("run");
+  expect(runId).not.toBeNull();
+  const runResponse = await page.request.get(`/api/runs/${runId}`);
+  expect(runResponse.ok()).toBe(true);
+  const completedRun = (await runResponse.json()) as { status: string; output: string | null };
+  expect(completedRun.status).toBe("completed");
+  expect(completedRun.output?.trim()).toBeTruthy();
+
+  const eventsResponse = await page.request.get(`/api/runs/${runId}/events`);
+  expect(eventsResponse.ok()).toBe(true);
+  const completedEvents = (await eventsResponse.json()) as Array<{ type: string; payload: Record<string, unknown> }>;
+  const eventTypes = completedEvents.map((event) => event.type);
+  expect(eventTypes).toContain("memory.retrieved");
+  expect(eventTypes).toContain("llm.completed");
+  expect(eventTypes).toContain("run.completed");
+  const selectedIndex = completedEvents.findIndex(
+    (event) => event.type === "tool.selected" && event.payload.tool === "knowledge_search",
+  );
+  const startedIndex = completedEvents.findIndex(
+    (event) => event.type === "tool.started" && event.payload.tool === "knowledge_search",
+  );
+  const completedIndex = completedEvents.findIndex(
+    (event) => event.type === "tool.completed" && event.payload.tool === "knowledge_search",
+  );
+  const finalLlmIndex = eventTypes.findIndex(
+    (type, index) => type === "llm.completed" && index > completedIndex,
+  );
+  const runCompletedIndex = eventTypes.indexOf("run.completed");
+  expect(selectedIndex).toBeGreaterThan(eventTypes.indexOf("memory.retrieved"));
+  expect(startedIndex).toBeGreaterThan(selectedIndex);
+  expect(completedIndex).toBeGreaterThan(startedIndex);
+  expect(finalLlmIndex).toBeGreaterThan(completedIndex);
+  expect(runCompletedIndex).toBeGreaterThan(finalLlmIndex);
+  expect(String(completedEvents[runCompletedIndex]?.payload.final_output ?? "").trim()).not.toBe("");
+  await expect(citation).toBeVisible();
   await page.getByRole("button", { name: /Delete memory: project codename is Atlas/ }).click();
   await expect(page.getByText("Memory deleted", { exact: true })).toBeVisible();
   await page.getByRole("checkbox", { name: /On|Off/ }).uncheck();
@@ -175,4 +213,33 @@ test("reports a real API offline state", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("API offline", { exact: true }).first()).toBeVisible();
   await expect(page.locator(".error-banner")).toContainText("Cannot connect to the Agent Studio API");
+});
+
+test("marks a structured backend 5xx unhealthy and recovers after a successful response", async ({ page }) => {
+  let backendHealthy = false;
+  await page.route("**/api/**", async (route) => {
+    if (!backendHealthy) {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Internal Server Error" }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto("/");
+  const connectionPill = page.locator(".connection-pill");
+  await expect(connectionPill).toHaveClass(/connection-offline/);
+  await expect(connectionPill).toContainText("API offline");
+  await expect(connectionPill).not.toContainText("Connected");
+  await expect(page.locator(".environment-card")).toHaveClass(/connection-offline/);
+  await expect(page.locator(".error-banner")).toContainText("Internal Server Error");
+
+  backendHealthy = true;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(connectionPill).toHaveClass(/connection-connected/);
+  await expect(connectionPill).toContainText("Connected");
+  await expect(page.locator(".error-banner")).toBeHidden();
 });

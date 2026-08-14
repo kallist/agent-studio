@@ -97,7 +97,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { detail?: string } | null;
-    reportApiConnection(body?.detail || response.status < 500 ? "connected" : "offline");
+    // A 4xx response proves the API is reachable; a 5xx response makes the
+    // current health indicator unhealthy regardless of whether its body parses.
+    reportApiConnection(response.status < 500 ? "connected" : "offline");
     throw new Error(body?.detail ?? `API request failed (${response.status}).`);
   }
   reportApiConnection("connected");
