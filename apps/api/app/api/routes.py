@@ -172,6 +172,9 @@ async def stream_events(
         async for event in service.stream_events(run_id, after_sequence):
             data = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
             yield f"id: {event.sequence}\nevent: {event.type}\ndata: {data}\n\n"
+            # Keep the typed event for existing consumers and mirror every envelope onto one
+            # stable channel so clients can render event types introduced after they shipped.
+            yield f"id: {event.sequence}\nevent: agent.event\ndata: {data}\n\n"
 
     return StreamingResponse(
         event_source(),

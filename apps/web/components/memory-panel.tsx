@@ -3,6 +3,8 @@ import type { MemoryRecord } from "@/lib/api";
 interface MemoryPanelProps {
   enabled: boolean;
   loading: boolean;
+  updating: boolean;
+  error: string | null;
   memories: MemoryRecord[];
   onDelete: (memoryId: string) => void;
   onToggle: (enabled: boolean) => void;
@@ -11,6 +13,8 @@ interface MemoryPanelProps {
 export function MemoryPanel({
   enabled,
   loading,
+  updating,
+  error,
   memories,
   onDelete,
   onToggle,
@@ -27,15 +31,18 @@ export function MemoryPanel({
             type="checkbox"
             checked={enabled}
             onChange={(event) => onToggle(event.target.checked)}
+            disabled={updating}
           />
-          <span>{enabled ? "On" : "Off"}</span>
+          <span>{updating ? "Updating…" : enabled ? "On" : "Off"}</span>
         </label>
       </div>
       {!enabled && (
         <p className="memory-note">Memory is off. Runs will not retrieve or write facts.</p>
       )}
-      {loading ? (
-        <p className="memory-note">Loading memory…</p>
+      {error ? (
+        <p className="memory-note memory-error" role="alert">{error}</p>
+      ) : loading ? (
+        <div className="memory-skeleton" aria-label="Loading durable memory"><span /><span /></div>
       ) : memories.length === 0 ? (
         <p className="memory-note">No durable facts saved for this agent.</p>
       ) : (
@@ -52,6 +59,7 @@ export function MemoryPanel({
                 type="button"
                 className="memory-delete"
                 onClick={() => onDelete(memory.id)}
+                disabled={updating}
                 aria-label={`Delete memory: ${memory.content}`}
               >
                 Delete

@@ -11,6 +11,8 @@ describe("MemoryPanel", () => {
       <MemoryPanel
         enabled
         loading={false}
+        updating={false}
+        error={null}
         memories={[
           {
             id: "memory-1",
@@ -34,5 +36,13 @@ describe("MemoryPanel", () => {
     expect(onDelete).toHaveBeenCalledWith("memory-1");
     fireEvent.click(screen.getByRole("checkbox"));
     expect(onToggle).toHaveBeenCalledWith(false);
+  });
+
+  it("renders loading, error, and mutation-disabled states", () => {
+    const view = render(<MemoryPanel enabled loading updating={false} error={null} memories={[]} onDelete={vi.fn()} onToggle={vi.fn()} />);
+    expect(view.getByLabelText("Loading durable memory")).toBeInTheDocument();
+    view.rerender(<MemoryPanel enabled loading={false} updating error="Memory API unavailable" memories={[]} onDelete={vi.fn()} onToggle={vi.fn()} />);
+    expect(view.getByRole("alert")).toHaveTextContent("Memory API unavailable");
+    expect(view.container.querySelector('input[type="checkbox"]')).toBeDisabled();
   });
 });

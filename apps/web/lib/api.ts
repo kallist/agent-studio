@@ -1,6 +1,6 @@
 export type RuntimeMode = "mock" | "openai";
 export type RunStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
-export type EventType =
+export type KnownEventType =
   | "run.started"
   | "step.started"
   | "llm.started"
@@ -16,6 +16,7 @@ export type EventType =
   | "run.completed"
   | "run.failed"
   | "run.cancelled";
+export type EventType = KnownEventType | (string & {});
 
 export interface AgentDefinition {
   id: string;
@@ -63,6 +64,23 @@ export interface AgentEvent {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 
+export type ApiConnectionStatus = "checking" | "connected" | "offline";
+
+let connectionStatus: ApiConnectionStatus = "checking";
+const connectionListeners = new Set<(status: ApiConnectionStatus) => void>();
+
+export function reportApiConnection(status: ApiConnectionStatus): void {
+  if (connectionStatus === status) return;
+  connectionStatus = status;
+  connectionListeners.forEach((listener) => listener(status));
+}
+
+export function subscribeApiConnection(listener: (status: ApiConnectionStatus) => void): () => void {
+  listener(connectionStatus);
+  connectionListeners.add(listener);
+  return () => connectionListeners.delete(listener);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -74,22 +92,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     });
   } catch {
-    throw new Error("无法连接 Agent Studio API。请确认后端已在 8000 端口运行。");
+    reportApiConnection("offline");
+    throw new Error("Cannot connect to the Agent Studio API. Confirm that the backend is running on port 8000.");
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { detail?: string } | null;
-    throw new Error(body?.detail ?? `API 请求失败 (${response.status})`);
+    // A 4xx response proves the API is reachable; a 5xx response makes the
+    // current health indicator unhealthy regardless of whether its body parses.
+    reportApiConnection(response.status < 500 ? "connected" : "offline");
+    throw new Error(body?.detail ?? `API request failed (${response.status}).`);
   }
+  reportApiConnection("connected");
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
 export const api = {
+  health: () => request<{ status: string }>("/health"),
   listAgents: () => request<AgentDefinition[]>("/agents"),
   createAgent: (payload: {
     name: string;
     instructions: string;
     runtime_mode: RuntimeMode;
+    model: string | null;
     tools: string[];
     knowledge_base_ids?: string[];
     memory_enabled?: boolean;
@@ -191,7 +216,7 @@ export interface KnowledgeSearchResponse {
   results: KnowledgeCitation[];
 }
 
-export const eventTypes: EventType[] = [
+export const eventTypes: KnownEventType[] = [
   "run.started",
   "step.started",
   "llm.started",

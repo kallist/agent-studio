@@ -73,6 +73,11 @@ async def test_create_list_run_retrieve_and_persist_trace(client: AsyncClient) -
     assert events[6]["payload"]["result"] == {"result": "5192"}
     assert events[-1]["payload"]["termination_reason"] == "completed"
 
+    stream_response = await client.get(f"/runs/{run['id']}/stream")
+    assert stream_response.status_code == 200
+    assert "event: tool.completed" in stream_response.text
+    assert stream_response.text.count("event: agent.event") == len(events)
+
 
 @pytest.mark.asyncio
 async def test_invalid_agent_and_run_return_not_found(client: AsyncClient) -> None:

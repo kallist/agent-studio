@@ -19,6 +19,8 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [results, setResults] = useState<KnowledgeCitation[]>([]);
   const [busy, setBusy] = useState(false);
+  const [documentsLoading, setDocumentsLoading] = useState(Boolean(bases[0]?.id));
+  const [searched, setSearched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const effectiveSelectedId = selectedId ?? bases[0]?.id ?? null;
   const selected = useMemo(
@@ -42,7 +44,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
           setError(reason instanceof Error ? reason.message : "Unable to load documents.");
         }
       },
-    );
+    ).finally(() => { if (active) setDocumentsLoading(false); });
     return () => { active = false; };
   }, [effectiveSelectedId]);
 
@@ -59,6 +61,9 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
       );
       onBasesChange([created, ...bases]);
       setSelectedId(created.id);
+      setDocuments([]);
+      setResults([]);
+      setDocumentsLoading(true);
       form.reset();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to create knowledge base.");
@@ -105,6 +110,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
     if (!selected) return;
     setBusy(true);
     setError(null);
+    setSearched(true);
     const data = new FormData(event.currentTarget);
     try {
       const response = await api.searchKnowledge(selected.id, String(data.get("query")));
@@ -117,7 +123,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
   }
 
   return (
-    <section className="knowledge-section" aria-labelledby="knowledge-heading">
+    <section className="knowledge-section" aria-labelledby="knowledge-heading" aria-busy={busy}>
       <div className="knowledge-heading">
         <div>
           <p className="eyebrow">KNOWLEDGE / RAG</p>
@@ -133,7 +139,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
             Description
             <input name="description" placeholder="Policies and operating notes" maxLength={2000} />
           </label>
-          <button className="primary-button" disabled={busy}>Create</button>
+          <button className="primary-button" disabled={busy}>{busy ? "Working…" : "Create"}</button>
         </form>
       </div>
 
@@ -148,7 +154,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
               <button
                 key={base.id}
                 className={base.id === effectiveSelectedId ? "collection-card selected" : "collection-card"}
-                onClick={() => { setSelectedId(base.id); setResults([]); }}
+                onClick={() => { setSelectedId(base.id); setDocuments([]); setDocumentsLoading(true); setError(null); setResults([]); setSearched(false); }}
               >
                 <strong>{base.name}</strong>
                 <small>{base.document_count} documents · {base.embedding_model}</small>
@@ -170,7 +176,8 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
               </form>
             )}
           </div>
-          <div className="document-list">
+          <div className="document-list" aria-live="polite">
+            {documentsLoading && <div className="knowledge-skeleton" aria-label="Loading documents"><span /><span /></div>}
             {documents.map((document) => (
               <article key={document.id} className="document-row">
                 <div><strong>{document.filename}</strong><small>{formatBytes(document.size_bytes)} · {document.mime_type}</small></div>
@@ -180,7 +187,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
                 {document.ingestion?.error && <p>{document.ingestion.error}</p>}
               </article>
             ))}
-            {selected && documents.length === 0 && <p className="muted-copy">No documents uploaded yet.</p>}
+            {selected && !documentsLoading && documents.length === 0 && <p className="muted-copy">No documents uploaded yet.</p>}
           </div>
         </div>
 
@@ -188,7 +195,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
           <form onSubmit={search}>
             <label htmlFor="knowledge-query">Test retrieval</label>
             <textarea id="knowledge-query" name="query" rows={3} required placeholder="Ask a question about these sources" />
-            <button className="primary-button" disabled={busy || !selected}>Semantic + keyword search</button>
+            <button className="primary-button" disabled={busy || !selected}>{busy ? "Searching…" : "Semantic + keyword search"}</button>
           </form>
           <div className="retrieval-results" aria-live="polite">
             {results.map((result, index) => (
@@ -205,6 +212,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
                 </dl>
               </details>
             ))}
+            {searched && !busy && results.length === 0 && <p className="muted-copy">No matching chunks were found.</p>}
           </div>
         </div>
       </div>
