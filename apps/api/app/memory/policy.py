@@ -98,10 +98,8 @@ class MemoryPolicy:
         if content is None:
             return None
 
-        normalized = " ".join(content.split()).strip(" .。!?！？")
-        if not normalized or len(normalized) > 500:
-            return None
-        if _SENSITIVE.search(normalized) or _INSTRUCTIONAL.search(normalized):
+        normalized = self.validate_persistent_content(content)
+        if normalized is None:
             return None
 
         timestamp = now or datetime.now(UTC)
@@ -115,6 +113,16 @@ class MemoryPolicy:
             expires_at=timestamp + timedelta(days=self.ttl_days),
             metadata={"write_reason": source},
         )
+
+    def validate_persistent_content(self, content: str) -> str | None:
+        """Apply the durable write gate to every application-owned write path."""
+
+        normalized = " ".join(content.split()).strip(" .。!?！？")
+        if not normalized or len(normalized) > 500:
+            return None
+        if _SENSITIVE.search(normalized) or _INSTRUCTIONAL.search(normalized):
+            return None
+        return normalized
 
     def rank(
         self,

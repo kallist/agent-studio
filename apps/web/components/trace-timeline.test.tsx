@@ -90,4 +90,27 @@ describe("TraceTimeline", () => {
     expect(screen.getByText(/\[REDACTED\]/)).toBeInTheDocument();
     expect(screen.queryByText(/secret-key/)).not.toBeInTheDocument();
   });
+
+  it("renders malicious generic event and citation metadata as inert text", () => {
+    const malicious = '<script>window.__xss=true</script>';
+    const { container } = render(<TraceTimeline events={[
+      {
+        event_id: "malicious",
+        run_id: "run",
+        sequence: 1,
+        type: "policy.checked",
+        timestamp: new Date().toISOString(),
+        payload: {
+          summary: malicious,
+          citations: [{ document: malicious, source: "javascript:alert(1)", chunk_id: "chunk", score: 1 }],
+        },
+      },
+    ]} />);
+
+    expect(screen.getAllByText(malicious, { exact: true }).length).toBeGreaterThan(0);
+    expect(screen.getByText("javascript:alert(1)", { exact: true })).toBeInTheDocument();
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
+    expect((window as typeof window & { __xss?: boolean }).__xss).not.toBe(true);
+  });
 });

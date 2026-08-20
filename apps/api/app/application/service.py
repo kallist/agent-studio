@@ -40,15 +40,18 @@ logger = logging.getLogger(__name__)
 
 
 class EventBroker:
+    _QUEUE_SIZE = 256
+
     def __init__(self) -> None:
         self._subscribers: dict[UUID, set[asyncio.Queue[AgentEvent]]] = {}
 
     async def publish(self, event: AgentEvent) -> None:
         for queue in self._subscribers.get(event.run_id, set()):
-            queue.put_nowait(event)
+            if not queue.full():
+                queue.put_nowait(event)
 
     def subscribe(self, run_id: UUID) -> asyncio.Queue[AgentEvent]:
-        queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
+        queue: asyncio.Queue[AgentEvent] = asyncio.Queue(maxsize=self._QUEUE_SIZE)
         self._subscribers.setdefault(run_id, set()).add(queue)
         return queue
 
@@ -100,15 +103,18 @@ class AgentService:
     async def get_agent(self, agent_id: UUID) -> AgentDefinition:
         return await self._repositories.get_agent(agent_id)
 
+    async def get_public_agent(self, agent_id: UUID) -> AgentDefinition:
+        return await self._repositories.get_public_agent(agent_id)
+
     async def set_memory_enabled(self, agent_id: UUID, enabled: bool) -> MemorySettings:
         return await self._repositories.set_memory_enabled(agent_id, enabled)
 
     async def list_memories(self, agent_id: UUID) -> list[MemoryRecord]:
-        await self._repositories.get_agent(agent_id)
+        await self._repositories.get_public_agent(agent_id)
         return await self._memory_store.list(agent_id)
 
     async def delete_memory(self, agent_id: UUID, memory_id: UUID) -> None:
-        await self._repositories.get_agent(agent_id)
+        await self._repositories.get_public_agent(agent_id)
         deleted = await self._memory_store.delete(agent_id, memory_id)
         if not deleted:
             raise EntityNotFoundError(f"Memory '{memory_id}' was not found for this agent.")
@@ -121,6 +127,7 @@ class AgentService:
         run_kind: RunKind = RunKind.NORMAL,
     ) -> RunResult:
         agent = await self._repositories.get_agent(agent_id)
+        await self._repositories.validate_agent_run_kind(agent_id, run_kind)
         runtime = self._runtimes[agent.runtime_mode]
         if not runtime.is_configured:
             raise ProviderNotConfiguredError("OpenAI provider is not configured.")
@@ -485,12 +492,15 @@ class AgentService:
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}:
                 return
             while True:
-                event = await queue.get()
-                if event.sequence <= cursor:
-                    continue
-                cursor = event.sequence
-                yield event
-                if event.type in {"run.completed", "run.failed", "run.cancelled"}:
-                    return
+                await queue.get()
+                # The queue is only a bounded wake-up signal. Persistence is the
+                # source of truth, so a slow subscriber catches up without an
+                # unbounded in-memory backlog or dropped events.
+                events = await self._repositories.list_events(run_id, cursor)
+                for event in events:
+                    cursor = event.sequence
+                    yield event
+                    if event.type in {"run.completed", "run.failed", "run.cancelled"}:
+                        return
         finally:
             self._broker.unsubscribe(run_id, queue)

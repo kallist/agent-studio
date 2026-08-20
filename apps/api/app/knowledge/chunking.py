@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from app.domain.errors import DocumentParsingError
 from app.knowledge.parsers import ParsedSection
 
 
@@ -18,11 +19,17 @@ class ChunkDraft:
 class TextChunker:
     """Paragraph-aware character chunker with bounded overlap."""
 
-    def __init__(self, target_chars: int = 900, overlap_chars: int = 140) -> None:
+    def __init__(
+        self,
+        target_chars: int = 900,
+        overlap_chars: int = 140,
+        max_chunks: int = 5_000,
+    ) -> None:
         if target_chars < 200 or overlap_chars < 0 or overlap_chars >= target_chars:
             raise ValueError("Invalid chunk size or overlap.")
         self.target_chars = target_chars
         self.overlap_chars = overlap_chars
+        self.max_chunks = max_chunks
 
     def chunk(self, sections: list[ParsedSection]) -> list[ChunkDraft]:
         drafts: list[ChunkDraft] = []
@@ -44,6 +51,10 @@ class TextChunker:
                         metadata=metadata,
                     )
                 )
+                if len(drafts) > self.max_chunks:
+                    raise DocumentParsingError(
+                        f"Document exceeds the {self.max_chunks} chunk limit."
+                    )
         return drafts
 
     def _split(self, text: str) -> list[tuple[str, int, int]]:

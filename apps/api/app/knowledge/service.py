@@ -47,6 +47,8 @@ class KnowledgeService:
         storage_root: Path,
         max_file_bytes: int,
         chunker: TextChunker | None = None,
+        max_extracted_chars: int = 2_000_000,
+        parser_timeout_seconds: float = 15.0,
     ) -> None:
         self._repository = repository
         self._vector_store = vector_store
@@ -54,6 +56,8 @@ class KnowledgeService:
         self._storage_root = storage_root.resolve()
         self._max_file_bytes = max_file_bytes
         self._chunker = chunker or TextChunker()
+        self._max_extracted_chars = max_extracted_chars
+        self._parser_timeout_seconds = parser_timeout_seconds
         self._enqueue: Callable[[UUID], None] | None = None
 
     def bind_enqueue(self, enqueue: Callable[[UUID], None]) -> None:
@@ -118,8 +122,9 @@ class KnowledgeService:
             document = await self._repository.mark_processing(job_id)
             if document is None:
                 return
-            parser = parser_for(document.mime_type)
-            sections = await asyncio.to_thread(parser.parse, document.storage_path)
+            parser = parser_for(document.mime_type, self._max_extracted_chars)
+            async with asyncio.timeout(self._parser_timeout_seconds):
+                sections = await asyncio.to_thread(parser.parse, document.storage_path)
             drafts = self._chunker.chunk(sections)
             if not drafts:
                 raise DocumentParsingError("Document does not contain searchable text.")
@@ -225,12 +230,14 @@ def _validate_upload(
     max_file_bytes: int,
 ) -> tuple[str, str, str]:
     normalized = unicodedata.normalize("NFC", filename).strip()
+    encoded_name = normalized.casefold()
     if (
         not normalized
         or len(normalized) > 255
         or Path(normalized).name != normalized
         or "/" in normalized
         or "\\" in normalized
+        or any(token in encoded_name for token in ("%2e", "%2f", "%5c", "%00"))
         or any(ord(char) < 32 for char in normalized)
     ):
         raise KnowledgeValidationError("Filename is invalid or contains a path.")

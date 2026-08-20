@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -36,6 +36,7 @@ from app.evaluation.contracts import (
 from app.evaluation.graders import DeterministicGrader, EvaluationContext, case_status
 from app.evaluation.repository import EvaluationRepository
 from app.memory.contracts import MemoryKind, MemoryRecord, MemoryStore
+from app.memory.policy import MemoryPolicy
 from app.observability.redaction import redact_text, redact_value
 from app.persistence.repositories import Repositories
 
@@ -50,12 +51,14 @@ class EvaluationService:
         repositories: Repositories,
         agent_service: AgentService,
         memory_store: MemoryStore,
+        memory_policy: MemoryPolicy,
         grader: DeterministicGrader | None = None,
     ) -> None:
         self._repository = repository
         self._repositories = repositories
         self._agent_service = agent_service
         self._memory_store = memory_store
+        self._memory_policy = memory_policy
         self._grader = grader or DeterministicGrader()
         self._enqueue: Callable[[UUID], None] | None = None
         self._start_lock = asyncio.Lock()
@@ -64,8 +67,9 @@ class EvaluationService:
         self._enqueue = enqueue
 
     async def create_suite(self, data: EvaluationSuiteCreate) -> EvaluationSuiteView:
-        await self._agent_service.get_agent(data.agent_id)
+        await self._agent_service.get_public_agent(data.agent_id)
         _reject_sensitive_definition(data.model_dump(mode="json"), "Evaluation suite")
+        self._validate_setup_memories(data.cases)
         return await self._repository.create_suite(data)
 
     async def list_suites(self) -> list[EvaluationSuiteSummary]:
@@ -78,7 +82,7 @@ class EvaluationService:
         self, suite_id: UUID, data: EvaluationSuiteUpdate
     ) -> EvaluationSuiteView:
         if data.agent_id is not None:
-            await self._agent_service.get_agent(data.agent_id)
+            await self._agent_service.get_public_agent(data.agent_id)
         _reject_sensitive_definition(
             data.model_dump(mode="json", exclude_unset=True), "Evaluation suite update"
         )
@@ -91,6 +95,7 @@ class EvaluationService:
         self, suite_id: UUID, data: EvaluationCaseCreate
     ) -> EvaluationCaseView:
         _reject_sensitive_definition(data.model_dump(mode="json"), "Evaluation case")
+        self._validate_setup_memories([data])
         return await self._repository.create_case(suite_id, data)
 
     async def update_case(
@@ -99,6 +104,8 @@ class EvaluationService:
         _reject_sensitive_definition(
             data.model_dump(mode="json", exclude_unset=True), "Evaluation case update"
         )
+        if data.setup is not None:
+            self._validate_setup_memories([data])
         return await self._repository.update_case(case_id, data)
 
     async def delete_case(self, case_id: UUID) -> None:
@@ -113,7 +120,7 @@ class EvaluationService:
                 "colons, or hyphens."
             )
         suite = await self._repository.get_suite(suite_id)
-        agent = await self._agent_service.get_agent(suite.agent_id)
+        agent = await self._agent_service.get_public_agent(suite.agent_id)
         enabled_cases = [case for case in suite.cases if case.enabled]
         case_snapshots: list[dict[str, object]] = []
         for case in enabled_cases:
@@ -315,11 +322,14 @@ class EvaluationService:
     ) -> None:
         timestamp = datetime.now(UTC)
         for seed in setup.memories:
+            normalized = self._memory_policy.validate_persistent_content(seed.content)
+            if normalized is None:
+                raise ValueError("Evaluation Memory setup was rejected by MemoryPolicy.")
             await self._memory_store.write(
                 MemoryRecord(
                     agent_id=evaluation_agent_id,
                     kind=MemoryKind.LONG_TERM,
-                    content=seed.content,
+                    content=normalized,
                     importance=seed.importance,
                     created_at=timestamp,
                     expires_at=timestamp + timedelta(days=180),
@@ -330,6 +340,19 @@ class EvaluationService:
                     },
                 )
             )
+
+    def _validate_setup_memories(
+        self, cases: Sequence[EvaluationCaseCreate | EvaluationCaseUpdate]
+    ) -> None:
+        for case in cases:
+            setup = case.setup
+            if setup is None:
+                continue
+            for seed in setup.memories:
+                if self._memory_policy.validate_persistent_content(seed.content) is None:
+                    raise ValueError(
+                        "Evaluation Memory setup was rejected by MemoryPolicy."
+                    )
 
     async def _refresh_aggregate(
         self, evaluation_run_id: UUID, total_cases: int

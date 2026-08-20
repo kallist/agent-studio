@@ -22,6 +22,9 @@ class DocumentParser(Protocol):
 
 
 class TextParser:
+    def __init__(self, max_extracted_chars: int = 2_000_000) -> None:
+        self.max_extracted_chars = max_extracted_chars
+
     def parse(self, path: Path) -> list[ParsedSection]:
         try:
             content = path.read_text(encoding="utf-8-sig")
@@ -31,6 +34,10 @@ class TextParser:
             raise DocumentParsingError("Text document contains binary data.")
         if not content.strip():
             raise DocumentParsingError("Document does not contain searchable text.")
+        if len(content) > self.max_extracted_chars:
+            raise DocumentParsingError(
+                f"Document exceeds the {self.max_extracted_chars} character extracted text limit."
+            )
         return [ParsedSection(text=content, metadata={})]
 
 
@@ -56,7 +63,7 @@ class MarkdownParser(TextParser):
                     text=content[match.start() : end],
                     metadata={
                         "format": "markdown",
-                        "heading": match.group(2).strip(),
+                        "heading": match.group(2).strip()[:500],
                         "heading_level": len(match.group(1)),
                     },
                 )
@@ -65,8 +72,11 @@ class MarkdownParser(TextParser):
 
 
 class PdfParser:
-    def __init__(self, max_pages: int = 500) -> None:
+    def __init__(
+        self, max_pages: int = 500, max_extracted_chars: int = 2_000_000
+    ) -> None:
         self.max_pages = max_pages
+        self.max_extracted_chars = max_extracted_chars
 
     def parse(self, path: Path) -> list[ParsedSection]:
         try:
@@ -75,10 +85,16 @@ class PdfParser:
                 raise DocumentParsingError("Encrypted PDFs are not supported.")
             if len(reader.pages) > self.max_pages:
                 raise DocumentParsingError(f"PDF exceeds the {self.max_pages} page limit.")
-            sections = [
-                ParsedSection(text=page.extract_text() or "", metadata={"page": index + 1})
-                for index, page in enumerate(reader.pages)
-            ]
+            sections: list[ParsedSection] = []
+            extracted_chars = 0
+            for index, page in enumerate(reader.pages):
+                text = page.extract_text() or ""
+                extracted_chars += len(text)
+                if extracted_chars > self.max_extracted_chars:
+                    raise DocumentParsingError(
+                        "PDF exceeds the configured extracted text limit."
+                    )
+                sections.append(ParsedSection(text=text, metadata={"page": index + 1}))
         except DocumentParsingError:
             raise
         except (PdfReadError, OSError, ValueError) as exc:
@@ -90,11 +106,11 @@ class PdfParser:
         return sections
 
 
-def parser_for(mime_type: str) -> DocumentParser:
+def parser_for(mime_type: str, max_extracted_chars: int = 2_000_000) -> DocumentParser:
     if mime_type == "text/plain":
-        return TextParser()
+        return TextParser(max_extracted_chars)
     if mime_type == "text/markdown":
-        return MarkdownParser()
+        return MarkdownParser(max_extracted_chars)
     if mime_type == "application/pdf":
-        return PdfParser()
+        return PdfParser(max_extracted_chars=max_extracted_chars)
     raise DocumentParsingError(f"No parser is registered for MIME type '{mime_type}'.")

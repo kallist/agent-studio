@@ -45,4 +45,27 @@ describe("MemoryPanel", () => {
     expect(view.getByRole("alert")).toHaveTextContent("Memory API unavailable");
     expect(view.container.querySelector('input[type="checkbox"]')).toBeDisabled();
   });
+
+  it("renders malicious Memory and API error text without creating executable nodes", () => {
+    const malicious = '<img src=x onerror="window.__xss=true">';
+    const view = render(<MemoryPanel enabled loading={false} updating={false} error={malicious} memories={[{
+      id: "memory-xss",
+      agent_id: "agent-1",
+      kind: "long_term",
+      content: malicious,
+      importance: 0.9,
+      source_run_id: null,
+      created_at: "2026-08-13T00:00:00Z",
+      expires_at: null,
+      metadata: {},
+    }]} onDelete={vi.fn()} onToggle={vi.fn()} />);
+
+    expect(screen.getByText(malicious, { exact: true })).toBeInTheDocument();
+    expect(view.container.querySelector("img")).toBeNull();
+    expect((window as typeof window & { __xss?: boolean }).__xss).not.toBe(true);
+
+    view.rerender(<MemoryPanel enabled loading={false} updating={false} error={malicious} memories={[]} onDelete={vi.fn()} onToggle={vi.fn()} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(malicious);
+    expect(view.container.querySelector("img")).toBeNull();
+  });
 });

@@ -54,6 +54,8 @@ Controls include:
 - encrypted PDF rejection and a 500-page ceiling;
 - no user-controlled storage paths;
 - parser work moved off the event loop;
+- 2,000,000 extracted-character and 5,000-chunk defaults;
+- a 15-second parser timeout and 500-character heading metadata bound;
 - parser exceptions contained at the job boundary and returned as bounded, non-sensitive failures.
 
 PDF extraction is text-only. Scanned/image-only PDFs fail with an explicit OCR-not-enabled message. This is intentional: adding OCR would add operational cost and a larger attack/dependency surface.

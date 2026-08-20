@@ -22,6 +22,9 @@ _LABELED_SECRET = re.compile(
     r"(?i)\b(api[ _-]?key|access[ _-]?token|refresh[ _-]?token|password|secret|"
     r"set-cookie|cookie)\s*([:=])\s*([^\s,;]+)"
 )
+_BEARER_VALUE = re.compile(r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]+")
+_BASIC_VALUE = re.compile(r"(?i)\b(Basic)\s+([A-Za-z0-9._~+/=-]+)")
+_OPENAI_KEY = re.compile(r"(?i)\bsk-[A-Za-z0-9_-]{8,}\b")
 
 
 def _normalized_key(key: object) -> str:
@@ -34,8 +37,22 @@ def redact_text(value: str) -> str:
     authorization_safe = _AUTHORIZATION_VALUE.sub(
         lambda match: f"{match.group(1)}{match.group(2)}{REDACTED}", value
     )
+    bearer_safe = _BEARER_VALUE.sub(
+        lambda match: f"{match.group(1)} {REDACTED}", authorization_safe
+    )
+    def redact_basic(match: re.Match[str]) -> str:
+        credential = match.group(2)
+        credential_like = (
+            len(credential) >= 16
+            or any(character.isupper() or character.isdigit() for character in credential)
+            or any(character in "+/=" for character in credential)
+        )
+        return f"{match.group(1)} {REDACTED}" if credential_like else match.group(0)
+
+    scheme_safe = _BASIC_VALUE.sub(redact_basic, bearer_safe)
+    key_safe = _OPENAI_KEY.sub(REDACTED, scheme_safe)
     return _LABELED_SECRET.sub(
-        lambda match: f"{match.group(1)}{match.group(2)}{REDACTED}", authorization_safe
+        lambda match: f"{match.group(1)}{match.group(2)}{REDACTED}", key_safe
     )
 
 

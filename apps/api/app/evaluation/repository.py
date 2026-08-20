@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.domain.contracts import RunStatus
+from app.domain.contracts import RunKind, RunStatus
 from app.domain.errors import EntityNotFoundError
 from app.evaluation.contracts import (
     EvaluationAggregate,
@@ -27,9 +27,11 @@ from app.evaluation.contracts import (
     GraderOutcome,
     GraderResultDraft,
     GraderResultView,
+    GraderType,
 )
 from app.observability.redaction import redact_text, redact_value
 from app.persistence.models import (
+    AgentModel,
     EvaluationCaseModel,
     EvaluationCaseResultModel,
     EvaluationRunModel,
@@ -327,6 +329,22 @@ class EvaluationRepository:
         async with self._sessions() as session:
             evaluation_run = await self._evaluation_run(session, evaluation_run_id)
             result = await self._case_result(session, case_result_id)
+            if result.evaluation_run_id != str(evaluation_run_id):
+                raise ValueError("Evaluation Case result belongs to a different Evaluation Run.")
+            evaluation_agent = await session.get(AgentModel, str(evaluation_agent_id))
+            run = await session.get(RunModel, str(run_id))
+            if (
+                evaluation_agent is None
+                or evaluation_agent.kind != "evaluation"
+                or evaluation_agent.source_agent_id != evaluation_run.agent_id
+            ):
+                raise ValueError("Evaluation Agent does not belong to this Evaluation Run source.")
+            if (
+                run is None
+                or run.agent_id != str(evaluation_agent_id)
+                or run.run_kind != RunKind.EVALUATION.value
+            ):
+                raise ValueError("Agent Run does not belong to this Evaluation Agent.")
             result.evaluation_agent_id = str(evaluation_agent_id)
             result.run_id = str(run_id)
             evaluation_run.active_run_id = str(run_id)
@@ -677,7 +695,7 @@ class EvaluationRepository:
             grader_results=[
                 GraderResultView(
                     id=UUID(grader.id),
-                    grader_type=grader.grader_type,
+                    grader_type=GraderType(grader.grader_type),
                     required=grader.required,
                     outcome=GraderOutcome(grader.outcome),
                     passed=grader.passed,

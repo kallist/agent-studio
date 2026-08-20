@@ -143,13 +143,23 @@ class AgentEvent(BaseModel):
     event_id: UUID = Field(default_factory=uuid4)
     run_id: UUID
     sequence: int
-    type: EventType
+    type: EventType = Field(
+        min_length=1,
+        max_length=40,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+    )
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     step_index: int | None = Field(default=None, ge=1)
     tool_call_id: UUID | None = None
     duration_ms: float | None = Field(default=None, ge=0)
     usage: UsageMetrics | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_payload_size(self) -> AgentEvent:
+        if len(self.model_dump_json(include={"payload"}).encode("utf-8")) > 256_000:
+            raise ValueError("Agent event payload exceeds the 256000 byte limit.")
+        return self
 
 
 class ToolCallObservation(BaseModel):
