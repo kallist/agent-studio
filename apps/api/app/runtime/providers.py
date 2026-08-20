@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -18,12 +19,15 @@ class MockProvider:
     """Deterministic decision provider for tests and the calculator demo."""
 
     name: str = "mock"
+    blocking_input: str | None = None
 
     @property
     def is_configured(self) -> bool:
         return True
 
     async def decide(self, context: AgentContext) -> AgentDecision:
+        if self.blocking_input is not None and context.user_input == self.blocking_input:
+            await asyncio.Event().wait()
         if context.steps:
             result = context.steps[-1].tool_result
             if result is not None and result.output is not None:

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { TraceTimeline } from "@/components/trace-timeline";
@@ -61,6 +61,33 @@ describe("TraceTimeline", () => {
     ]} />);
     expect(screen.getByText("Memory retrieved")).toBeInTheDocument();
     expect(screen.getByText("Memory written")).toBeInTheDocument();
-    expect(screen.getAllByText("Memory")).toHaveLength(2);
+    expect(screen.getAllByText("Memory")).toHaveLength(3);
+  });
+
+  it("filters tools without losing unknown events from All", async () => {
+    const timestamp = new Date().toISOString();
+    render(<TraceTimeline events={[
+      { event_id: "tool", run_id: "run", sequence: 1, type: "tool.started", timestamp, payload: { tool: "calculator", arguments: { expression: "1 + 1" } } },
+      { event_id: "memory", run_id: "run", sequence: 2, type: "memory.retrieved", timestamp, payload: { count: 1 } },
+      { event_id: "future", run_id: "run", sequence: 3, type: "policy.checked", timestamp, payload: { policy: "safe" } },
+    ]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    expect(screen.getByText("Calculator")).toBeInTheDocument();
+    expect(screen.queryByText("Memory retrieved")).not.toBeInTheDocument();
+    expect(screen.queryByText("policy.checked")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("Memory retrieved")).toBeInTheDocument();
+    expect(screen.getByText("policy.checked")).toBeInTheDocument();
+  });
+
+  it("renders redacted structured payloads without restoring secrets", () => {
+    const timestamp = new Date().toISOString();
+    render(<TraceTimeline events={[
+      { event_id: "redacted", run_id: "run", sequence: 1, type: "tool.started", timestamp, payload: { tool: "fixture", arguments: { api_key: "[REDACTED]" } } },
+    ]} />);
+    expect(screen.getByText(/\[REDACTED\]/)).toBeInTheDocument();
+    expect(screen.queryByText(/secret-key/)).not.toBeInTheDocument();
   });
 });

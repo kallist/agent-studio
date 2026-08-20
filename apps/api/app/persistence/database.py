@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -16,6 +17,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.6-terra"
     openai_agents_disable_tracing: bool = True
+    mock_provider_block_input: str | None = Field(default=None, max_length=200)
     cors_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
     knowledge_storage_path: str = "./data/knowledge"
     knowledge_max_file_bytes: int = 10 * 1024 * 1024

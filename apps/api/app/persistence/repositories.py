@@ -4,27 +4,29 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import cast
+from time import monotonic
 from uuid import UUID
 
-from sqlalchemy import Select, select, text
+from sqlalchemy import Select, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.domain.contracts import (
     AgentCreate,
     AgentDefinition,
     AgentEvent,
-    EventType,
     RunResult,
     RunStatus,
     RuntimeMode,
 )
 from app.domain.errors import EntityNotFoundError
 from app.memory.contracts import MemoryRecord, MemorySettings
+from app.memory.keys import normalized_memory_key
 from app.memory.store import upsert_memory
+from app.observability.redaction import redact_text, sanitize_event
 from app.persistence.models import (
     AgentMemorySettingModel,
     AgentModel,
+    MemoryModel,
     RunEventModel,
     RunModel,
 )
@@ -64,13 +66,26 @@ def to_run(model: RunModel) -> RunResult:
 
 
 def to_event(model: RunEventModel) -> AgentEvent:
+    stored = json.loads(model.payload_json)
+    if isinstance(stored, dict) and stored.get("_trace_version") == 1:
+        payload = stored.get("payload", {})
+        correlation = {
+            "step_index": stored.get("step_index"),
+            "tool_call_id": stored.get("tool_call_id"),
+            "duration_ms": stored.get("duration_ms"),
+            "usage": stored.get("usage"),
+        }
+    else:
+        payload = stored
+        correlation = {}
     return AgentEvent(
         event_id=UUID(model.event_id),
         run_id=UUID(model.run_id),
         sequence=model.sequence,
-        type=cast(EventType, model.type),
+        type=model.type,
         timestamp=_aware(model.timestamp),
-        payload=json.loads(model.payload_json),
+        payload=payload,
+        **correlation,
     )
 
 
@@ -167,6 +182,21 @@ class Repositories:
                 raise EntityNotFoundError(f"Run '{run_id}' was not found.")
             return to_run(model)
 
+    async def list_runs(self, *, limit: int | None = None) -> list[RunResult]:
+        async with self._sessions() as session:
+            statement = select(RunModel).order_by(RunModel.created_at.desc())
+            if limit is not None:
+                statement = statement.limit(limit)
+            rows = await session.scalars(statement)
+            return [to_run(row) for row in rows]
+
+    async def count_runs_by_status(self) -> dict[RunStatus, int]:
+        async with self._sessions() as session:
+            rows = await session.execute(
+                select(RunModel.status, func.count(RunModel.id)).group_by(RunModel.status)
+            )
+            return {RunStatus(status_value): count for status_value, count in rows.all()}
+
     async def update_run(
         self,
         run_id: UUID,
@@ -181,7 +211,7 @@ class Repositories:
                 raise EntityNotFoundError(f"Run '{run_id}' was not found.")
             model.status = status.value
             model.output = output
-            model.error = error
+            model.error = redact_text(error) if error is not None else None
             model.updated_at = datetime.now(UTC)
             await session.commit()
             await session.refresh(model)
@@ -207,7 +237,7 @@ class Repositories:
                 raise EntityNotFoundError(f"Run '{run_id}' was not found.")
             model.status = status.value
             model.output = output
-            model.error = error
+            model.error = redact_text(error) if error is not None else None
             model.updated_at = datetime.now(UTC)
             session.add(_event_model(event))
             await session.commit()
@@ -223,6 +253,7 @@ class Repositories:
     ) -> list[AgentEvent]:
         """Atomically gate/write memory, persist its event, and complete the run."""
 
+        transaction_started = monotonic()
         async with self._serialized_agent_memory_transaction(agent_id) as (session, _agent):
             run = await session.get(RunModel, str(run_id))
             if run is None:
@@ -232,9 +263,15 @@ class Repositories:
 
             setting = await session.get(AgentMemorySettingModel, str(agent_id))
             memory_enabled = setting.enabled if setting is not None else True
+            existing_memory_id = await session.scalar(
+                select(MemoryModel.id).where(
+                    MemoryModel.agent_id == str(agent_id),
+                    MemoryModel.normalized_key == normalized_memory_key(candidate.content),
+                )
+            )
             stored = await upsert_memory(session, candidate) if memory_enabled else None
             persisted_events: list[AgentEvent] = []
-            normalized_terminal = terminal_event
+            terminal_sequence = terminal_event.sequence
             if stored is not None:
                 memory_event = AgentEvent(
                     run_id=run_id,
@@ -249,12 +286,27 @@ class Repositories:
                             else None
                         ),
                         "write_reason": stored.metadata.get("write_reason"),
+                        "write_result": (
+                            "deduplicated" if existing_memory_id is not None else "created"
+                        ),
                     },
                 )
                 persisted_events.append(memory_event)
-                normalized_terminal = terminal_event.model_copy(
-                    update={"sequence": terminal_event.sequence + 1}
+                terminal_sequence += 1
+
+            terminal_duration = terminal_event.duration_ms
+            if terminal_duration is not None:
+                terminal_duration = round(
+                    terminal_duration + (monotonic() - transaction_started) * 1000,
+                    2,
                 )
+            normalized_terminal = terminal_event.model_copy(
+                update={
+                    "sequence": terminal_sequence,
+                    "timestamp": datetime.now(UTC),
+                    "duration_ms": terminal_duration,
+                }
+            )
 
             run.status = RunStatus.COMPLETED.value
             run.output = output
@@ -316,13 +368,36 @@ class Repositories:
             )
             return [to_event(row) for row in result]
 
+    async def list_events_for_runs(self, run_ids: list[UUID]) -> dict[UUID, list[AgentEvent]]:
+        grouped: dict[UUID, list[AgentEvent]] = {run_id: [] for run_id in run_ids}
+        if not run_ids:
+            return grouped
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(RunEventModel)
+                .where(RunEventModel.run_id.in_([str(run_id) for run_id in run_ids]))
+                .order_by(RunEventModel.run_id, RunEventModel.sequence)
+            )
+            for row in rows:
+                event = to_event(row)
+                grouped[event.run_id].append(event)
+        return grouped
 
 def _event_model(event: AgentEvent) -> RunEventModel:
+    safe = sanitize_event(event)
+    stored = {
+        "_trace_version": 1,
+        "step_index": safe.step_index,
+        "tool_call_id": str(safe.tool_call_id) if safe.tool_call_id is not None else None,
+        "duration_ms": safe.duration_ms,
+        "usage": safe.usage.model_dump(mode="json") if safe.usage is not None else None,
+        "payload": safe.payload,
+    }
     return RunEventModel(
-        event_id=str(event.event_id),
-        run_id=str(event.run_id),
-        sequence=event.sequence,
-        type=event.type,
-        timestamp=event.timestamp,
-        payload_json=json.dumps(event.payload, ensure_ascii=False),
+        event_id=str(safe.event_id),
+        run_id=str(safe.run_id),
+        sequence=safe.sequence,
+        type=safe.type,
+        timestamp=safe.timestamp,
+        payload_json=json.dumps(stored, ensure_ascii=False),
     )

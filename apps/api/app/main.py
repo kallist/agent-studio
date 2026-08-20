@@ -74,7 +74,9 @@ def create_app(
     service = AgentService(
         repositories=repositories,
         runtimes={
-            RuntimeMode.MOCK: MockRuntime(executor),
+            RuntimeMode.MOCK: MockRuntime(
+                executor, blocking_input=settings.mock_provider_block_input
+            ),
             RuntimeMode.OPENAI: AgentsSdkRuntime(provider, executor),
         },
         available_tools=registry.names,

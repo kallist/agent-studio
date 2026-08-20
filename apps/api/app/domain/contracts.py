@@ -60,7 +60,7 @@ class ToolResultStatus(StrEnum):
     FAILED = "failed"
 
 
-EventType = Literal[
+KnownEventType = Literal[
     "run.started",
     "step.started",
     "llm.started",
@@ -72,11 +72,16 @@ EventType = Literal[
     "tool.failed",
     "step.completed",
     "memory.retrieved",
+    "memory.retrieval.skipped",
     "memory.written",
     "run.completed",
     "run.failed",
     "run.cancelled",
 ]
+
+# Known names document the current contract; the actual type remains open so
+# future application events survive persistence, SSE, and generic rendering.
+EventType = str
 
 
 class AgentDefinition(BaseModel):
@@ -120,6 +125,12 @@ class RunResult(BaseModel):
     updated_at: datetime
 
 
+class UsageMetrics(BaseModel):
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+
+
 class AgentEvent(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -128,7 +139,62 @@ class AgentEvent(BaseModel):
     sequence: int
     type: EventType
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    step_index: int | None = Field(default=None, ge=1)
+    tool_call_id: UUID | None = None
+    duration_ms: float | None = Field(default=None, ge=0)
+    usage: UsageMetrics | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolCallObservation(BaseModel):
+    tool_call_id: UUID
+    tool_name: str
+    step_index: int | None = Field(default=None, ge=1)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = Field(default=None, ge=0)
+    status: Literal["running", "completed", "failed", "unknown"]
+    input: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] | None = None
+    error_summary: str | None = None
+
+
+class ToolCallCounts(BaseModel):
+    total: int = Field(ge=0)
+    succeeded: int = Field(ge=0)
+    failed: int = Field(ge=0)
+
+
+class RunObservability(BaseModel):
+    run_id: UUID
+    agent_id: UUID
+    runtime_type: str | None = None
+    provider_type: str | None = None
+    status: RunStatus
+    termination_reason: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    terminal_at: datetime | None = None
+    duration_ms: float | None = Field(default=None, ge=0)
+    event_count: int = Field(ge=0)
+    step_count: int = Field(ge=0)
+    tool_calls: ToolCallCounts
+    usage: UsageMetrics = Field(default_factory=UsageMetrics)
+    error_category: str | None = None
+    error_summary: str | None = None
+    event_statistics: dict[str, int] = Field(default_factory=dict)
+    tools: list[ToolCallObservation] = Field(default_factory=list)
+
+
+class DashboardObservability(BaseModel):
+    total_runs: int = Field(ge=0)
+    completed: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    cancelled: int = Field(ge=0)
+    running: int = Field(ge=0)
+    success_rate: float | None = Field(default=None, ge=0, le=1)
+    average_duration_ms: float | None = Field(default=None, ge=0)
+    recent_runs: list[RunObservability] = Field(default_factory=list)
 
 
 class ToolSpec(BaseModel):

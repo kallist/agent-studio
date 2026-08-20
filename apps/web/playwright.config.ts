@@ -9,7 +9,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "..\\..\\.venv\\Scripts\\uvicorn.exe app.main:app --app-dir ../api --host 127.0.0.1 --port 8110",
+      command: "powershell -NoProfile -Command \"$env:MOCK_PROVIDER_BLOCK_INPUT='__playwright_wait_for_cancel__'; ..\\..\\.venv\\Scripts\\uvicorn.exe app.main:app --app-dir ../api --host 127.0.0.1 --port 8110\"",
       url: "http://127.0.0.1:8110/health",
       reuseExistingServer: false,
       timeout: 120_000,

@@ -11,18 +11,11 @@ import { MemoryPanel } from "@/components/memory-panel";
 import { Playground } from "@/components/playground";
 import { RunDetail } from "@/components/run-detail";
 import { ConfirmDialog, ErrorBanner, ToastRegion } from "@/components/ui";
-import { AgentDefinition, AgentEvent, api, ApiConnectionStatus, KnowledgeBase, MemoryRecord, reportApiConnection, RunResult, subscribeApiConnection } from "@/lib/api";
+import { AgentDefinition, AgentEvent, api, ApiConnectionStatus, DashboardObservability, KnowledgeBase, MemoryRecord, reportApiConnection, RunObservability, RunResult, subscribeApiConnection } from "@/lib/api";
 import type { RunSnapshot, StudioView, ToastMessage } from "@/lib/studio-types";
 
 const defaultInput = "Calculate 128 * 37 + 456";
-const historyKey = "agent-studio.run-history.v1";
 const views: StudioView[] = ["dashboard", "agents", "builder", "playground", "run"];
-
-function createSnapshot(run: RunResult, events: AgentEvent[], agentName: string): RunSnapshot {
-  const toolEvents = events.filter((event) => event.type === "tool.started");
-  const latencies = events.map((event) => event.payload.latency_ms).filter((value): value is number => typeof value === "number");
-  return { ...run, agentName, toolCalls: toolEvents.length, latencyMs: latencies.length ? latencies.reduce((sum, value) => sum + value, 0) : null };
-}
 
 export function Studio() {
   const [view, setView] = useState<StudioView>("dashboard");
@@ -31,6 +24,8 @@ export function Studio() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [run, setRun] = useState<RunResult | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [observability, setObservability] = useState<RunObservability | null>(null);
+  const [telemetry, setTelemetry] = useState<DashboardObservability | null>(null);
   const [history, setHistory] = useState<RunSnapshot[]>([]);
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [input, setInput] = useState(defaultInput);
@@ -57,14 +52,22 @@ export function Studio() {
     setToast({ id: Date.now(), tone, title, message });
   }, []);
 
-  const rememberRun = useCallback((latestRun: RunResult, latestEvents: AgentEvent[], fallbackName?: string) => {
-    const agentName = agentsRef.current.find((agent) => agent.id === latestRun.agent_id)?.name ?? fallbackName ?? "Unknown agent";
-    const snapshot = createSnapshot(latestRun, latestEvents, agentName);
+  const rememberRun = useCallback((summary: RunObservability, fallbackName?: string) => {
+    const agentName = agentsRef.current.find((agent) => agent.id === summary.agent_id)?.name ?? fallbackName ?? "Unknown agent";
+    const snapshot: RunSnapshot = { ...summary, agentName };
     setHistory((current) => {
-      const next = [snapshot, ...current.filter((item) => item.id !== snapshot.id)].slice(0, 30);
-      window.localStorage.setItem(historyKey, JSON.stringify(next));
-      return next;
+      return [snapshot, ...current.filter((item) => item.run_id !== snapshot.run_id)].slice(0, 30);
     });
+  }, []);
+
+  const refreshDashboard = useCallback(async () => {
+    const data = await api.getDashboardObservability();
+    setTelemetry(data);
+    setHistory(data.recent_runs.map((summary) => ({
+      ...summary,
+      agentName: agentsRef.current.find((agent) => agent.id === summary.agent_id)?.name ?? "Unknown agent",
+    })));
+    return data;
   }, []);
 
   const updateLocation = useCallback((nextView: StudioView, agentId?: string | null, runId?: string | null) => {
@@ -83,10 +86,12 @@ export function Studio() {
   }, []);
 
   const refreshRunState = useCallback(async (runId: string, notify = false) => {
-    const [latestRun, latestEvents] = await Promise.all([api.getRun(runId), api.listEvents(runId)]);
+    const [latestRun, latestEvents, latestObservability] = await Promise.all([api.getRun(runId), api.listEvents(runId), api.getRunObservability(runId)]);
     setRun(latestRun);
     setEvents(latestEvents);
-    rememberRun(latestRun, latestEvents);
+    setObservability(latestObservability);
+    rememberRun(latestObservability);
+    if (["completed", "failed", "cancelled"].includes(latestRun.status)) void refreshDashboard();
     await loadMemories(latestRun.agent_id);
     if (notify) {
       if (latestRun.status === "completed") showToast("success", "Run completed", `${latestEvents.length} trace events were persisted.`);
@@ -94,7 +99,7 @@ export function Studio() {
       if (latestRun.status === "cancelled") showToast("info", "Run cancelled", "The persisted trace remains available.");
     }
     return latestRun;
-  }, [loadMemories, rememberRun, showToast]);
+  }, [loadMemories, refreshDashboard, rememberRun, showToast]);
 
   const startStream = useCallback((runId: string, afterSequence = 0) => {
     streamRef.current?.close();
@@ -142,11 +147,10 @@ export function Studio() {
   useEffect(() => {
     let active = true;
     async function load() {
-      try { const stored = window.localStorage.getItem(historyKey); if (stored) setHistory(JSON.parse(stored) as RunSnapshot[]); }
-      catch { window.localStorage.removeItem(historyKey); }
       void api.health().catch(() => undefined);
       const [loadedAgents] = await Promise.all([loadAgents(), loadKnowledgeBases()]);
       if (!active) return;
+      await refreshDashboard().catch(() => undefined);
       const params = new URLSearchParams(window.location.search);
       const requestedView = params.get("view");
       const agentId = params.get("agent");
@@ -157,24 +161,24 @@ export function Studio() {
       if (requestedView && views.includes(requestedView as StudioView)) setView(requestedView as StudioView);
       if (runId) {
         try {
-          const [loadedRun, loadedEvents] = await Promise.all([api.getRun(runId), api.listEvents(runId)]);
+          const [loadedRun, loadedEvents, loadedObservability] = await Promise.all([api.getRun(runId), api.listEvents(runId), api.getRunObservability(runId)]);
           if (!active) return;
-          setRun(loadedRun); setEvents(loadedEvents); setInput(loadedRun.input); setSelectedId(loadedRun.agent_id);
-          rememberRun(loadedRun, loadedEvents, initialAgent?.name);
+          setRun(loadedRun); setEvents(loadedEvents); setObservability(loadedObservability); setInput(loadedRun.input); setSelectedId(loadedRun.agent_id);
+          rememberRun(loadedObservability, initialAgent?.name);
           if (["pending", "running"].includes(loadedRun.status)) startStream(runId, loadedEvents.at(-1)?.sequence ?? 0);
         } catch (reason) { if (active) setError(reason instanceof Error ? reason.message : "The requested run could not be loaded."); }
       }
     }
     void load();
     return () => { active = false; streamRef.current?.close(); };
-  }, [loadAgents, loadKnowledgeBases, loadMemories, rememberRun, startStream]);
+  }, [loadAgents, loadKnowledgeBases, loadMemories, refreshDashboard, rememberRun, startStream]);
 
   const inspectRun = useCallback(async (snapshot: RunSnapshot) => {
     setError(null); setSubmitting(true);
     try {
-      const [loadedRun, loadedEvents] = await Promise.all([api.getRun(snapshot.id), api.listEvents(snapshot.id)]);
-      setRun(loadedRun); setEvents(loadedEvents); setInput(loadedRun.input); setSelectedId(loadedRun.agent_id); setView("run");
-      updateLocation("run", loadedRun.agent_id, loadedRun.id); rememberRun(loadedRun, loadedEvents, snapshot.agentName); void loadMemories(loadedRun.agent_id);
+      const [loadedRun, loadedEvents, loadedObservability] = await Promise.all([api.getRun(snapshot.run_id), api.listEvents(snapshot.run_id), api.getRunObservability(snapshot.run_id)]);
+      setRun(loadedRun); setEvents(loadedEvents); setObservability(loadedObservability); setInput(loadedRun.input); setSelectedId(loadedRun.agent_id); setView("run");
+      updateLocation("run", loadedRun.agent_id, loadedRun.id); rememberRun(loadedObservability, snapshot.agentName); void loadMemories(loadedRun.agent_id);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "The selected run could not be loaded."); }
     finally { setSubmitting(false); }
   }, [loadMemories, rememberRun, updateLocation]);
@@ -186,7 +190,7 @@ export function Studio() {
   }, [history, inspectRun, run, selectedId, updateLocation]);
 
   function selectAgent(agentId: string) {
-    streamRef.current?.close(); setSelectedId(agentId); setRun(null); setEvents([]); setMemories([]); setError(null); setView("playground");
+    streamRef.current?.close(); setSelectedId(agentId); setRun(null); setEvents([]); setObservability(null); setMemories([]); setError(null); setView("playground");
     updateLocation("playground", agentId); void loadMemories(agentId);
   }
 
@@ -194,7 +198,7 @@ export function Studio() {
     setSubmitting(true); setError(null);
     try {
       const created = await api.createAgent(payload);
-      setAgents((current) => [created, ...current]); setSelectedId(created.id); setRun(null); setEvents([]); setMemories([]); setView("playground");
+      setAgents((current) => [created, ...current]); setSelectedId(created.id); setRun(null); setEvents([]); setObservability(null); setMemories([]); setView("playground");
       updateLocation("playground", created.id); showToast("success", "Agent saved", `${created.name} is ready in the Playground.`); return created;
     } catch (reason) { const message = reason instanceof Error ? reason.message : "The agent definition could not be saved."; setError(message); showToast("error", "Save failed", message); return null; }
     finally { setSubmitting(false); }
@@ -224,23 +228,24 @@ export function Studio() {
 
   async function runAgent(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!selected || !input.trim()) return;
-    setSubmitting(true); setError(null); setEvents([]); setRun(null);
+    setSubmitting(true); setError(null); setEvents([]); setRun(null); setObservability(null);
     try { const createdRun = await api.createRun(selected.id, input.trim()); setRun(createdRun); setView("playground"); updateLocation("playground", selected.id, createdRun.id); startStream(createdRun.id); }
     catch (reason) { const message = reason instanceof Error ? reason.message : "The agent run could not be started."; setError(message); showToast("error", "Run could not start", message); }
     finally { setSubmitting(false); }
   }
 
-  function clearRun() { streamRef.current?.close(); setRun(null); setEvents([]); setConfirmClear(false); updateLocation("playground", selectedId); showToast("info", "Conversation cleared", "The persisted run is still available from the Dashboard."); }
-  function rerun() { if (run) setInput(run.input); setRun(null); setEvents([]); setView("playground"); updateLocation("playground", selectedId); }
+  async function cancelRun() { if (!run) return; try { await api.cancelRun(run.id); showToast("info", "Cancellation requested", "The runtime will persist a cancelled terminal event."); } catch (reason) { setError(reason instanceof Error ? reason.message : "The run could not be cancelled."); } }
+  function clearRun() { streamRef.current?.close(); setRun(null); setEvents([]); setObservability(null); setConfirmClear(false); updateLocation("playground", selectedId); showToast("info", "Conversation cleared", "The persisted run is still available from the Dashboard."); }
+  function rerun() { if (run) setInput(run.input); setRun(null); setEvents([]); setObservability(null); setView("playground"); updateLocation("playground", selectedId); }
 
   return (
     <AppShell view={view} hasRun={Boolean(run || history.length)} apiStatus={apiStatus} onNavigate={navigate}>
       {error && <ErrorBanner message={error} onRetry={() => void loadAgents()} onDismiss={() => setError(null)} />}
-      {view === "dashboard" && <Dashboard agents={agents} runs={history} loading={loading} onNavigate={navigate} onInspectRun={(item) => void inspectRun(item)} />}
+      {view === "dashboard" && <Dashboard agents={agents} telemetry={telemetry} runs={history} loading={loading} onNavigate={navigate} onInspectRun={(item) => void inspectRun(item)} />}
       {view === "agents" && <AgentsPage agents={agents} knowledgeBases={knowledgeBases} runs={history} loading={loading} selectedId={selectedId} onCreate={() => navigate("builder")} onOpen={(agent) => selectAgent(agent.id)} />}
       {view === "builder" && <><AgentBuilder saving={submitting} knowledgeBases={knowledgeBases} knowledgeLoading={knowledgeLoading} knowledgeError={knowledgeError} onReloadKnowledge={() => void loadKnowledgeBases()} onSave={createAgent} /><KnowledgeStudio bases={knowledgeBases} onBasesChange={(bases) => { setKnowledgeBases(bases); setKnowledgeError(null); }} /></>}
-      {view === "playground" && <><Playground agents={agents} selected={selected} run={run} events={events} input={input} submitting={submitting} onSelectAgent={selectAgent} onInput={setInput} onRun={runAgent} onBuild={() => navigate("builder")} onInspect={() => navigate("run")} onRequestClear={() => setConfirmClear(true)} />{selected && <MemoryPanel enabled={selected.memory_enabled} loading={memoryLoading} updating={memoryUpdating} error={memoryError} memories={memories} onDelete={(memoryId) => void deleteMemory(memoryId)} onToggle={(enabled) => void toggleMemory(enabled)} />}</>}
-      {view === "run" && <RunDetail run={run} events={events} agent={selected} onBack={() => navigate("playground")} onRerun={rerun} />}
+      {view === "playground" && <><Playground agents={agents} selected={selected} run={run} events={events} input={input} submitting={submitting} onSelectAgent={selectAgent} onInput={setInput} onRun={runAgent} onCancel={() => void cancelRun()} onBuild={() => navigate("builder")} onInspect={() => navigate("run")} onRequestClear={() => setConfirmClear(true)} />{selected && <MemoryPanel enabled={selected.memory_enabled} loading={memoryLoading} updating={memoryUpdating} error={memoryError} memories={memories} onDelete={(memoryId) => void deleteMemory(memoryId)} onToggle={(enabled) => void toggleMemory(enabled)} />}</>}
+      {view === "run" && <RunDetail run={run} events={events} observability={observability} agent={selected} onBack={() => navigate("playground")} onRerun={rerun} />}
       <ToastRegion toast={toast} onDismiss={() => setToast(null)} />
       <ConfirmDialog open={confirmClear} title="Clear this conversation?" description="This removes the current conversation from the Playground. The persisted run remains available in recent runs." confirmLabel="Clear conversation" danger onConfirm={clearRun} onCancel={() => setConfirmClear(false)} />
     </AppShell>
