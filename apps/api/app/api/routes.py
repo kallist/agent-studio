@@ -5,7 +5,17 @@ from collections.abc import AsyncIterator
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import Response, StreamingResponse
 
 from app.application.service import AgentService
@@ -367,7 +377,7 @@ async def cancel_evaluation_run(
 async def stream_events(
     run_id: UUID,
     service: ServiceDependency,
-    after_sequence: int = 0,
+    after_sequence: Annotated[int, Query(ge=0, le=2_147_483_647)] = 0,
 ) -> StreamingResponse:
     try:
         await service.get_run(run_id)

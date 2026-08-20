@@ -33,6 +33,11 @@ def test_calculate_rejects_division_by_zero() -> None:
         "(1).real",
         "2 ** 8",
         "[1, 2]",
+        "open('secret.txt')",
+        "lambda: 1",
+        "sum([1, 2])",
+        "[value for value in [1, 2]]",
+        "{'key': 1}",
         "True + 1",
     ],
 )

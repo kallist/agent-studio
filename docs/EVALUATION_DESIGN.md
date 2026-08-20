@@ -36,7 +36,8 @@ Case changes increment the Suite revision. Delete is soft so historical Evaluati
 lineage.
 
 A Case contains a bounded input, enabled flag, one or more structured grader configurations, and
-an optional allowlisted setup. v1 setup supports only evaluation-scoped durable Memory records.
+an optional allowlisted setup. v1 setup supports only evaluation-scoped durable Memory records,
+and every seed passes the same `MemoryPolicy` content gate as normal durable writes.
 It cannot execute Python, shell, SQL, regular expressions, imports, or file paths.
 
 ## 5. Grader contract

@@ -7,8 +7,14 @@ import pytest
 from pydantic import BaseModel
 
 from app.domain.contracts import ToolCall
-from app.domain.errors import ToolExecutionError, ToolPermissionError
-from app.tools.registry import Tool, ToolDefinition, ToolExecutor, ToolRegistry
+from app.domain.errors import ToolExecutionError, ToolPermissionError, ToolValidationError
+from app.tools.registry import (
+    Tool,
+    ToolDefinition,
+    ToolExecutor,
+    ToolRegistry,
+    default_tool_registry,
+)
 
 
 class InputModel(BaseModel):
@@ -103,4 +109,37 @@ async def test_tool_executor_validates_output_schema_and_size() -> None:
     with pytest.raises(ToolExecutionError, match="exceeded"):
         await large_executor.execute(
             ToolCall(name="test_tool", arguments={"value": "x"}), {"test:execute"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_rejects_oversized_input_before_handler() -> None:
+    called = False
+
+    async def handler(payload: BaseModel) -> OutputModel:
+        nonlocal called
+        called = True
+        return OutputModel(value=InputModel.model_validate(payload).value)
+
+    executor = ToolExecutor(ToolRegistry([make_tool(handler)]))
+
+    with pytest.raises(ToolValidationError, match="input exceeded"):
+        await executor.execute(
+            ToolCall(name="test_tool", arguments={"value": "x" * 20_000}),
+            {"test:execute"},
+        )
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_calculator_schema_rejects_unexpected_arguments() -> None:
+    executor = ToolExecutor(default_tool_registry())
+
+    with pytest.raises(ToolValidationError, match="Invalid arguments"):
+        await executor.execute(
+            ToolCall(
+                name="calculator",
+                arguments={"expression": "1 + 1", "fallback": "__import__('os')"},
+            ),
+            {"compute"},
         )

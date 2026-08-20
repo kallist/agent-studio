@@ -7,6 +7,7 @@ from collections.abc import Awaitable
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TypeVar
+from uuid import UUID
 
 from pydantic import JsonValue, ValidationError
 
@@ -373,10 +374,10 @@ class AgentLoop:
                 )
             except _CancellationRequested:
                 raise
-            except Exception as exc:
+            except Exception:
                 return None, (
                     TerminationReason.PROVIDER_ERROR,
-                    self._bounded_error(f"Provider failed with {type(exc).__name__}: {exc}"),
+                    "Provider failed unexpectedly.",
                 )
             await self._emit(
                 emit,
@@ -496,7 +497,7 @@ class AgentLoop:
                 sequence=0,
                 type=event_type,
                 step_index=step if isinstance(step, int) else None,
-                tool_call_id=call_id if isinstance(call_id, str) else None,
+                tool_call_id=UUID(call_id) if isinstance(call_id, str) else None,
                 duration_ms=(
                     float(duration)
                     if isinstance(duration, (int, float)) and duration >= 0

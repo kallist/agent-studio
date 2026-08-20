@@ -304,6 +304,21 @@ async def test_provider_failure_has_explicit_termination_reason() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unexpected_provider_exception_does_not_expose_secret_or_local_path() -> None:
+    provider = ScriptedProvider(
+        [RuntimeError(r"sk-test-super-secret at C:\Users\operator\provider.py")]
+    )
+
+    result, events = await execute(provider)
+
+    assert result.termination_reason == TerminationReason.PROVIDER_ERROR
+    assert result.error == "Provider failed unexpectedly."
+    serialized = "\n".join(str(event.model_dump(mode="json")) for event in events)
+    assert "sk-test-super-secret" not in serialized
+    assert "C:\\Users" not in serialized
+
+
+@pytest.mark.asyncio
 async def test_per_tool_call_limit_blocks_changed_arguments() -> None:
     provider = ScriptedProvider(
         [

@@ -95,4 +95,18 @@ LLM-as-a-Judge, multi-agent orchestration, and distributed evaluation workers re
 
 ## Security
 
-Never commit API keys, tokens, local `.env` files, or local databases. `.env.example` contains names and non-secret defaults only.
+Agent Studio's default security model is a single-user local development workbench. The documented
+commands bind to `127.0.0.1`; CORS/Host defaults are local and OpenAI is opt-in with no silent Mock
+fallback. RAG documents, Memory, user prompts, tool/provider output, and Evaluation values are
+untrusted data. They do not gain system-instruction or tool-permission authority by entering a
+runtime context.
+
+Uploads are limited to validated UTF-8 txt/Markdown and text-extractable PDF files, stored under
+generated application-owned names with byte, extraction, page, parser-time, and chunk bounds. Tool
+execution, runtime steps, events, SSE queues, and Evaluation cardinality are also bounded. React
+renders untrusted values as text; raw HTML/Markdown rendering is not implemented.
+
+Never commit API keys, tokens, local `.env` files, local databases, or generated traces. The product
+has **no authentication, RBAC, or multi-tenancy** and must not be exposed as a public/shared service.
+See [Security Hardening v1](docs/SECURITY_DESIGN.md) for the threat model, trust boundaries,
+implemented controls, tests, and known limitations.

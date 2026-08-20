@@ -129,6 +129,24 @@ describe("evaluation helpers and surfaces", () => {
     expect(onViewRun).toHaveBeenCalledWith(results[1].run_id);
   });
 
+  it("renders malicious grader evidence and actual output as inert text", () => {
+    const malicious = '<script>window.__xss=true</script>';
+    const unsafe = result("fail", 9);
+    unsafe.actual_output = malicious;
+    unsafe.case_snapshot = { name: malicious, input: malicious };
+    unsafe.grader_results[0].message = malicious;
+    unsafe.grader_results[0].expected = { value: malicious };
+    unsafe.grader_results[0].actual = malicious;
+    unsafe.grader_results[0].evidence = [{ source: "javascript:alert(1)", value: malicious }];
+
+    const view = render(<EvaluationRunPanel run={evaluationRun} results={[unsafe]} filteredResults={[unsafe]} filter="all" selectedResult={unsafe} loading={false} onFilter={vi.fn()} onSelect={vi.fn()} onBack={vi.fn()} onCancel={vi.fn()} onViewRun={vi.fn()} />);
+
+    expect(screen.getAllByText(malicious, { exact: true }).length).toBeGreaterThan(0);
+    expect(view.container.querySelector("script")).toBeNull();
+    expect(view.container.querySelector('a[href^="javascript:"]')).toBeNull();
+    expect((window as typeof window & { __xss?: boolean }).__xss).not.toBe(true);
+  });
+
   it("renders zero state and dynamically configures an exact-match grader", async () => {
     vi.spyOn(api, "listEvaluationSuites").mockResolvedValue([]);
     render(<EvaluationStudio agents={[agent]} onViewRun={vi.fn()} />);

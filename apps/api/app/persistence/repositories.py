@@ -147,8 +147,25 @@ class Repositories:
             setting = await session.get(AgentMemorySettingModel, str(agent_id))
             return to_agent(model, memory_enabled=setting.enabled if setting else True)
 
+    async def get_public_agent(self, agent_id: UUID) -> AgentDefinition:
+        async with self._sessions() as session:
+            model = await session.get(AgentModel, str(agent_id))
+            if model is None or model.kind != "normal":
+                raise EntityNotFoundError(f"Agent '{agent_id}' was not found.")
+            setting = await session.get(AgentMemorySettingModel, str(agent_id))
+            return to_agent(model, memory_enabled=setting.enabled if setting else True)
+
+    async def validate_agent_run_kind(self, agent_id: UUID, run_kind: RunKind) -> None:
+        async with self._sessions() as session:
+            model = await session.get(AgentModel, str(agent_id))
+            expected_kind = "evaluation" if run_kind is RunKind.EVALUATION else "normal"
+            if model is None or model.kind != expected_kind:
+                raise EntityNotFoundError(f"Agent '{agent_id}' was not found.")
+
     async def set_memory_enabled(self, agent_id: UUID, enabled: bool) -> MemorySettings:
-        async with self._serialized_agent_memory_transaction(agent_id) as (session, _agent):
+        async with self._serialized_agent_memory_transaction(agent_id) as (session, agent):
+            if agent.kind != "normal":
+                raise EntityNotFoundError(f"Agent '{agent_id}' was not found.")
             setting = await session.get(AgentMemorySettingModel, str(agent_id))
             if setting is None:
                 setting = AgentMemorySettingModel(agent_id=str(agent_id), enabled=enabled)
@@ -172,6 +189,9 @@ class Repositories:
 
     async def create_evaluation_agent(self, source: AgentDefinition) -> AgentDefinition:
         async with self._sessions() as session:
+            source_model = await session.get(AgentModel, str(source.id))
+            if source_model is None or source_model.kind != "normal":
+                raise EntityNotFoundError(f"Agent '{source.id}' was not found.")
             model = AgentModel(
                 name=f"[Evaluation] {source.name}",
                 instructions=source.instructions,

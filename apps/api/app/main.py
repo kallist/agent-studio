@@ -6,8 +6,11 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api.routes import router
 from app.application.service import AgentService
@@ -16,6 +19,7 @@ from app.evaluation.graders import DeterministicGrader
 from app.evaluation.repository import EvaluationRepository
 from app.evaluation.service import EvaluationService
 from app.evaluation.worker import LocalEvaluationWorker
+from app.knowledge.chunking import TextChunker
 from app.knowledge.embeddings import DeterministicEmbeddingProvider, OpenAIEmbeddingProvider
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.service import KnowledgeService
@@ -33,6 +37,31 @@ from app.runtime.mock import MockRuntime
 from app.runtime.providers import OpenAIProvider
 from app.tools.knowledge_search import KnowledgeSearchTool
 from app.tools.registry import ToolExecutor, default_tool_registry
+
+
+class SecurityHeadersMiddleware:
+    """Add browser hardening headers without BaseHTTPMiddleware task indirection."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["X-Content-Type-Options"] = "nosniff"
+                headers["Referrer-Policy"] = "no-referrer"
+                headers["X-Frame-Options"] = "DENY"
+                headers["Permissions-Policy"] = (
+                    "camera=(), microphone=(), geolocation=()"
+                )
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 def create_app(
@@ -61,6 +90,9 @@ def create_app(
         embeddings,
         Path(knowledge_storage_path or settings.knowledge_storage_path),
         settings.knowledge_max_file_bytes,
+        chunker=TextChunker(max_chunks=settings.knowledge_max_chunks),
+        max_extracted_chars=settings.knowledge_max_extracted_chars,
+        parser_timeout_seconds=settings.knowledge_parser_timeout_seconds,
     )
     worker = LocalIngestionWorker(knowledge_service, settings.knowledge_worker_count)
     knowledge_service.bind_enqueue(worker.enqueue)
@@ -94,6 +126,7 @@ def create_app(
         repositories=repositories,
         agent_service=service,
         memory_store=memory_store,
+        memory_policy=memory_policy,
         grader=DeterministicGrader(),
     )
     evaluation_worker = LocalEvaluationWorker(
@@ -120,13 +153,19 @@ def create_app(
 
     app = FastAPI(title="Agent Studio API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=[host.strip() for host in settings.allowed_hosts.split(",") if host.strip()],
+    )
+    app.add_middleware(
         CORSMiddleware,
         allow_origins=[origin.strip() for origin in settings.cors_origins.split(",")],
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type", "Idempotency-Key"],
     )
+    app.add_middleware(SecurityHeadersMiddleware)
     app.include_router(router)
+
     return app
 
 

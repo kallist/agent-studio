@@ -50,6 +50,24 @@ const events: AgentEvent[] = [
 ];
 
 describe("RunDetail observability", () => {
+  it("renders malicious output and errors as inert text", () => {
+    const malicious = '<script>window.__xss=true</script><img src=x onerror="window.__xss=true">';
+    const xssRun = { ...run(), input: malicious, output: malicious, error: null };
+    const view = render(<RunDetail run={xssRun} events={[]} observability={metrics()} agent={null} onBack={vi.fn()} onRerun={vi.fn()} />);
+
+    expect(screen.getByText(malicious, { exact: true })).toBeInTheDocument();
+    expect(view.container.querySelector("script")).toBeNull();
+    expect(view.container.querySelector("img")).toBeNull();
+    expect((window as typeof window & { __xss?: boolean }).__xss).not.toBe(true);
+
+    const failedRun = { ...run("failed"), input: malicious, error: malicious };
+    const failedMetrics = { ...metrics("failed"), error_summary: malicious };
+    view.rerender(<RunDetail run={failedRun} events={[]} observability={failedMetrics} agent={null} onBack={vi.fn()} onRerun={vi.fn()} />);
+    expect(screen.getByText(malicious, { exact: true })).toBeInTheDocument();
+    expect(view.container.querySelector("script")).toBeNull();
+    expect(view.container.querySelector("img")).toBeNull();
+  });
+
   it("renders real summary metrics, token N/A, correlation, and filters", () => {
     render(<RunDetail run={run()} events={events} observability={metrics()} agent={null} onBack={vi.fn()} onRerun={vi.fn()} />);
     expect(screen.getByLabelText("Observability metrics")).toHaveTextContent("125 ms");

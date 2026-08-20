@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.domain.contracts import AgentCreate, AgentEvent, RunStatus
 from app.main import create_app
+from app.observability.redaction import REDACTED, redact_text, redact_value
 from app.persistence.database import settings
 from app.persistence.models import RunEventModel, RunModel
 from app.runtime.providers import MockProvider
@@ -247,6 +248,56 @@ async def test_trace_redaction_precedes_database_and_api_boundaries(
 
 def _redacted_count(value: str) -> int:
     return value.count("[REDACTED]")
+
+
+def test_redaction_handles_key_variants_auth_schemes_and_openai_shaped_keys() -> None:
+    structured = redact_value(
+        {
+            "AUTHORIZATION": "Bearer abc",
+            "apiKey": "one",
+            "API_KEY": "two",
+            "access_token": "three",
+            "refresh-token": "four",
+            "Password": "five",
+            "secret": "six",
+            "Cookie": "seven",
+            "set-cookie": "eight",
+            "nested": [{"authorization": "Basic abc"}],
+        }
+    )
+    assert isinstance(structured, dict)
+    assert structured["AUTHORIZATION"] == REDACTED
+    assert structured["apiKey"] == REDACTED
+    assert structured["API_KEY"] == REDACTED
+    assert structured["nested"] == [{"authorization": REDACTED}]
+
+    free_text = redact_text(
+        "Bearer abc Basic ZGVtbzpwYXNz sk-test-super-secret; ordinary token prose"
+    )
+    assert "Bearer abc" not in free_text
+    assert "Basic ZGVtbzpwYXNz" not in free_text
+    assert "sk-test-super-secret" not in free_text
+    assert "ordinary token prose" in free_text
+
+
+def test_sse_event_type_rejects_stream_framing_characters() -> None:
+    with pytest.raises(ValueError):
+        AgentEvent(
+            run_id=UUID(int=1),
+            sequence=1,
+            type="safe\nevent: forged",
+            payload={"data": "still data"},
+        )
+
+
+def test_event_payload_has_a_persistence_size_bound() -> None:
+    with pytest.raises(ValueError, match="payload exceeds"):
+        AgentEvent(
+            run_id=UUID(int=1),
+            sequence=1,
+            type="policy.checked",
+            payload={"value": "x" * 300_000},
+        )
 
 
 @pytest.mark.asyncio

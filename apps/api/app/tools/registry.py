@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.domain.contracts import ToolCall, ToolResult, ToolResultStatus, ToolSpec
 from app.domain.errors import (
@@ -19,10 +19,14 @@ from app.tools.calculator import calculate
 
 
 class CalculatorInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     expression: str = Field(min_length=1, max_length=200)
 
 
 class CalculatorOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     result: str = Field(max_length=2_000)
 
 
@@ -38,6 +42,7 @@ class ToolDefinition:
     timeout_seconds: float
     permissions: frozenset[str]
     output_limit: int
+    input_limit: int = 16_000
 
     def as_spec(self) -> ToolSpec:
         return ToolSpec(
@@ -67,6 +72,8 @@ class ToolRegistry:
                 raise ValueError(f"Tool '{name}' must declare a positive timeout.")
             if tool.definition.output_limit <= 0:
                 raise ValueError(f"Tool '{name}' must declare a positive output limit.")
+            if tool.definition.input_limit <= 0:
+                raise ValueError(f"Tool '{name}' must declare a positive input limit.")
             definitions[name] = tool
         self._tools = definitions
 
@@ -101,6 +108,14 @@ class ToolExecutor:
             raise ToolPermissionError(
                 f"Tool '{call.name}' requires permissions that were not granted: {missing}."
             )
+        serialized_input = json.dumps(
+            call.arguments,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(serialized_input) > definition.input_limit:
+            raise ToolValidationError(f"Tool '{call.name}' input exceeded its limit.")
         try:
             validated_input = definition.input_schema.model_validate(call.arguments)
         except ValidationError as exc:
@@ -124,7 +139,11 @@ class ToolExecutor:
             output = definition.output_schema.model_validate(raw_output)
         except ValidationError as exc:
             raise ToolExecutionError(f"Tool '{call.name}' returned invalid output.") from exc
-        serialized = json.dumps(output.model_dump(mode="json"), ensure_ascii=False)
+        serialized = json.dumps(
+            output.model_dump(mode="json"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
         if len(serialized) > definition.output_limit:
             raise ToolExecutionError(f"Tool '{call.name}' output exceeded its limit.")
         return ToolResult(
