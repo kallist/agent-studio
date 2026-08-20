@@ -12,6 +12,10 @@ from sqlalchemy.engine import Connection
 from app.api.routes import router
 from app.application.service import AgentService
 from app.domain.contracts import EmbeddingProvider, RuntimeMode
+from app.evaluation.graders import DeterministicGrader
+from app.evaluation.repository import EvaluationRepository
+from app.evaluation.service import EvaluationService
+from app.evaluation.worker import LocalEvaluationWorker
 from app.knowledge.embeddings import DeterministicEmbeddingProvider, OpenAIEmbeddingProvider
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.service import KnowledgeService
@@ -84,6 +88,18 @@ def create_app(
         memory_retriever=memory_retriever,
         memory_policy=memory_policy,
     )
+    evaluation_repository = EvaluationRepository(sessions)
+    evaluation_service = EvaluationService(
+        repository=evaluation_repository,
+        repositories=repositories,
+        agent_service=service,
+        memory_store=memory_store,
+        grader=DeterministicGrader(),
+    )
+    evaluation_worker = LocalEvaluationWorker(
+        evaluation_service, settings.evaluation_worker_count
+    )
+    evaluation_service.bind_enqueue(evaluation_worker.enqueue)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -93,8 +109,12 @@ def create_app(
         await vector_store.initialize()
         app.state.agent_service = service
         app.state.knowledge_service = knowledge_service
+        app.state.evaluation_service = evaluation_service
+        app.state.evaluation_worker = evaluation_worker
         await worker.start()
+        await evaluation_worker.start()
         yield
+        await evaluation_worker.stop()
         await worker.stop()
         await engine.dispose()
 
@@ -104,7 +124,7 @@ def create_app(
         allow_origins=[origin.strip() for origin in settings.cors_origins.split(",")],
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", "Idempotency-Key"],
     )
     app.include_router(router)
     return app
@@ -120,6 +140,22 @@ def _apply_lightweight_schema_migrations(connection: Connection) -> None:
     if "knowledge_base_ids_json" not in agent_columns:
         connection.execute(
             text("ALTER TABLE agents ADD COLUMN knowledge_base_ids_json TEXT DEFAULT '[]'")
+        )
+    if "kind" not in agent_columns:
+        connection.execute(
+            text("ALTER TABLE agents ADD COLUMN kind VARCHAR(20) NOT NULL DEFAULT 'normal'")
+        )
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_agents_kind ON agents (kind)"))
+    if "source_agent_id" not in agent_columns:
+        connection.execute(text("ALTER TABLE agents ADD COLUMN source_agent_id VARCHAR(36)"))
+
+    run_columns = {column["name"] for column in inspector.get_columns("runs")}
+    if "run_kind" not in run_columns:
+        connection.execute(
+            text("ALTER TABLE runs ADD COLUMN run_kind VARCHAR(20) NOT NULL DEFAULT 'normal'")
+        )
+        connection.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_runs_run_kind ON runs (run_kind)")
         )
 
     chunk_columns = {column["name"] for column in inspector.get_columns("chunks")}

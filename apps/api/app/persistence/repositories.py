@@ -14,6 +14,7 @@ from app.domain.contracts import (
     AgentCreate,
     AgentDefinition,
     AgentEvent,
+    RunKind,
     RunResult,
     RunStatus,
     RuntimeMode,
@@ -57,6 +58,7 @@ def to_run(model: RunModel) -> RunResult:
         id=UUID(model.id),
         agent_id=UUID(model.agent_id),
         status=RunStatus(model.status),
+        run_kind=RunKind(model.run_kind),
         input=model.input,
         output=model.output,
         error=model.error,
@@ -109,6 +111,7 @@ class Repositories:
                 knowledge_base_ids_json=json.dumps(
                     [str(value) for value in data.knowledge_base_ids]
                 ),
+                kind="normal",
             )
             session.add(model)
             await session.flush()
@@ -124,7 +127,11 @@ class Repositories:
 
     async def list_agents(self) -> list[AgentDefinition]:
         async with self._sessions() as session:
-            rows = await session.scalars(select(AgentModel).order_by(AgentModel.created_at.desc()))
+            rows = await session.scalars(
+                select(AgentModel)
+                .where(AgentModel.kind == "normal")
+                .order_by(AgentModel.created_at.desc())
+            )
             agents = list(rows)
             settings = await session.scalars(select(AgentMemorySettingModel))
             enabled_by_agent = {row.agent_id: row.enabled for row in settings}
@@ -163,11 +170,44 @@ class Repositories:
             )
             return len(set(rows)) == len(set(knowledge_base_ids))
 
-    async def create_run(self, agent_id: UUID, user_input: str) -> RunResult:
+    async def create_evaluation_agent(self, source: AgentDefinition) -> AgentDefinition:
+        async with self._sessions() as session:
+            model = AgentModel(
+                name=f"[Evaluation] {source.name}",
+                instructions=source.instructions,
+                runtime_mode=source.runtime_mode.value,
+                model=source.model,
+                tools_json=json.dumps(source.tools),
+                knowledge_base_ids_json=json.dumps(
+                    [str(value) for value in source.knowledge_base_ids]
+                ),
+                kind="evaluation",
+                source_agent_id=str(source.id),
+            )
+            session.add(model)
+            await session.flush()
+            session.add(
+                AgentMemorySettingModel(
+                    agent_id=model.id,
+                    enabled=source.memory_enabled,
+                )
+            )
+            await session.commit()
+            await session.refresh(model)
+            return to_agent(model, memory_enabled=source.memory_enabled)
+
+    async def create_run(
+        self,
+        agent_id: UUID,
+        user_input: str,
+        *,
+        run_kind: RunKind = RunKind.NORMAL,
+    ) -> RunResult:
         async with self._sessions() as session:
             model = RunModel(
                 agent_id=str(agent_id),
                 status=RunStatus.PENDING.value,
+                run_kind=run_kind.value,
                 input=user_input,
             )
             session.add(model)
@@ -182,18 +222,31 @@ class Repositories:
                 raise EntityNotFoundError(f"Run '{run_id}' was not found.")
             return to_run(model)
 
-    async def list_runs(self, *, limit: int | None = None) -> list[RunResult]:
+    async def list_runs(
+        self,
+        *,
+        limit: int | None = None,
+        run_kind: RunKind = RunKind.NORMAL,
+    ) -> list[RunResult]:
         async with self._sessions() as session:
-            statement = select(RunModel).order_by(RunModel.created_at.desc())
+            statement = (
+                select(RunModel)
+                .where(RunModel.run_kind == run_kind.value)
+                .order_by(RunModel.created_at.desc())
+            )
             if limit is not None:
                 statement = statement.limit(limit)
             rows = await session.scalars(statement)
             return [to_run(row) for row in rows]
 
-    async def count_runs_by_status(self) -> dict[RunStatus, int]:
+    async def count_runs_by_status(
+        self, *, run_kind: RunKind = RunKind.NORMAL
+    ) -> dict[RunStatus, int]:
         async with self._sessions() as session:
             rows = await session.execute(
-                select(RunModel.status, func.count(RunModel.id)).group_by(RunModel.status)
+                select(RunModel.status, func.count(RunModel.id))
+                .where(RunModel.run_kind == run_kind.value)
+                .group_by(RunModel.status)
             )
             return {RunStatus(status_value): count for status_value, count in rows.all()}
 

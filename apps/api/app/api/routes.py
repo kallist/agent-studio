@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 
 from app.application.service import AgentService
@@ -31,6 +31,18 @@ from app.domain.errors import (
     KnowledgeValidationError,
     ProviderNotConfiguredError,
 )
+from app.evaluation.contracts import (
+    EvaluationCaseCreate,
+    EvaluationCaseResultView,
+    EvaluationCaseUpdate,
+    EvaluationCaseView,
+    EvaluationRunView,
+    EvaluationSuiteCreate,
+    EvaluationSuiteSummary,
+    EvaluationSuiteUpdate,
+    EvaluationSuiteView,
+)
+from app.evaluation.service import EvaluationService
 from app.knowledge.service import KnowledgeService
 from app.memory.contracts import MemoryRecord, MemorySettings, MemorySettingsUpdate
 from app.persistence.database import settings
@@ -50,6 +62,13 @@ def get_knowledge_service(request: Request) -> KnowledgeService:
 
 
 KnowledgeServiceDependency = Annotated[KnowledgeService, Depends(get_knowledge_service)]
+
+
+def get_evaluation_service(request: Request) -> EvaluationService:
+    return cast(EvaluationService, request.app.state.evaluation_service)
+
+
+EvaluationServiceDependency = Annotated[EvaluationService, Depends(get_evaluation_service)]
 
 
 @router.get("/health")
@@ -175,6 +194,173 @@ async def get_dashboard_observability(
     service: ServiceDependency,
 ) -> DashboardObservability:
     return await service.get_dashboard_observability()
+
+
+@router.post(
+    "/evaluation-suites",
+    response_model=EvaluationSuiteView,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_evaluation_suite(
+    payload: EvaluationSuiteCreate,
+    service: EvaluationServiceDependency,
+) -> EvaluationSuiteView:
+    try:
+        return await service.create_suite(payload)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/evaluation-suites", response_model=list[EvaluationSuiteSummary])
+async def list_evaluation_suites(
+    service: EvaluationServiceDependency,
+) -> list[EvaluationSuiteSummary]:
+    return await service.list_suites()
+
+
+@router.get("/evaluation-suites/{suite_id}", response_model=EvaluationSuiteView)
+async def get_evaluation_suite(
+    suite_id: UUID,
+    service: EvaluationServiceDependency,
+) -> EvaluationSuiteView:
+    try:
+        return await service.get_suite(suite_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/evaluation-suites/{suite_id}", response_model=EvaluationSuiteView)
+async def update_evaluation_suite(
+    suite_id: UUID,
+    payload: EvaluationSuiteUpdate,
+    service: EvaluationServiceDependency,
+) -> EvaluationSuiteView:
+    try:
+        return await service.update_suite(suite_id, payload)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/evaluation-suites/{suite_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_evaluation_suite(
+    suite_id: UUID,
+    service: EvaluationServiceDependency,
+) -> Response:
+    try:
+        await service.delete_suite(suite_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/evaluation-suites/{suite_id}/cases",
+    response_model=EvaluationCaseView,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_evaluation_case(
+    suite_id: UUID,
+    payload: EvaluationCaseCreate,
+    service: EvaluationServiceDependency,
+) -> EvaluationCaseView:
+    try:
+        return await service.create_case(suite_id, payload)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.patch("/evaluation-cases/{case_id}", response_model=EvaluationCaseView)
+async def update_evaluation_case(
+    case_id: UUID,
+    payload: EvaluationCaseUpdate,
+    service: EvaluationServiceDependency,
+) -> EvaluationCaseView:
+    try:
+        return await service.update_case(case_id, payload)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/evaluation-cases/{case_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_evaluation_case(
+    case_id: UUID,
+    service: EvaluationServiceDependency,
+) -> Response:
+    try:
+        await service.delete_case(case_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/evaluation-suites/{suite_id}/runs",
+    response_model=EvaluationRunView,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_evaluation_run(
+    suite_id: UUID,
+    service: EvaluationServiceDependency,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> EvaluationRunView:
+    try:
+        return await service.start_run(suite_id, idempotency_key)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/evaluation-runs/{evaluation_run_id}", response_model=EvaluationRunView)
+async def get_evaluation_run(
+    evaluation_run_id: UUID,
+    service: EvaluationServiceDependency,
+) -> EvaluationRunView:
+    try:
+        return await service.get_run(evaluation_run_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/evaluation-runs/{evaluation_run_id}/results",
+    response_model=list[EvaluationCaseResultView],
+)
+async def list_evaluation_results(
+    evaluation_run_id: UUID,
+    service: EvaluationServiceDependency,
+) -> list[EvaluationCaseResultView]:
+    try:
+        return await service.list_results(evaluation_run_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/evaluation-runs/{evaluation_run_id}/cancel",
+    response_model=EvaluationRunView,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def cancel_evaluation_run(
+    evaluation_run_id: UUID,
+    service: EvaluationServiceDependency,
+) -> EvaluationRunView:
+    try:
+        return await service.cancel_run(evaluation_run_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}/stream")

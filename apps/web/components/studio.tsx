@@ -6,6 +6,7 @@ import { AgentBuilder } from "@/components/agent-builder";
 import { AgentsPage } from "@/components/agents-page";
 import { AppShell } from "@/components/app-shell";
 import { Dashboard } from "@/components/dashboard";
+import { EvaluationStudio } from "@/components/evaluation-studio";
 import { KnowledgeStudio } from "@/components/knowledge-studio";
 import { MemoryPanel } from "@/components/memory-panel";
 import { Playground } from "@/components/playground";
@@ -15,7 +16,7 @@ import { AgentDefinition, AgentEvent, api, ApiConnectionStatus, DashboardObserva
 import type { RunSnapshot, StudioView, ToastMessage } from "@/lib/studio-types";
 
 const defaultInput = "Calculate 128 * 37 + 456";
-const views: StudioView[] = ["dashboard", "agents", "builder", "playground", "run"];
+const views: StudioView[] = ["dashboard", "agents", "builder", "playground", "evaluations", "run"];
 
 export function Studio() {
   const [view, setView] = useState<StudioView>("dashboard");
@@ -90,7 +91,7 @@ export function Studio() {
     setRun(latestRun);
     setEvents(latestEvents);
     setObservability(latestObservability);
-    rememberRun(latestObservability);
+    if (latestRun.run_kind === "normal") rememberRun(latestObservability);
     if (["completed", "failed", "cancelled"].includes(latestRun.status)) void refreshDashboard();
     await loadMemories(latestRun.agent_id);
     if (notify) {
@@ -164,7 +165,7 @@ export function Studio() {
           const [loadedRun, loadedEvents, loadedObservability] = await Promise.all([api.getRun(runId), api.listEvents(runId), api.getRunObservability(runId)]);
           if (!active) return;
           setRun(loadedRun); setEvents(loadedEvents); setObservability(loadedObservability); setInput(loadedRun.input); setSelectedId(loadedRun.agent_id);
-          rememberRun(loadedObservability, initialAgent?.name);
+          if (loadedRun.run_kind === "normal") rememberRun(loadedObservability, initialAgent?.name);
           if (["pending", "running"].includes(loadedRun.status)) startStream(runId, loadedEvents.at(-1)?.sequence ?? 0);
         } catch (reason) { if (active) setError(reason instanceof Error ? reason.message : "The requested run could not be loaded."); }
       }
@@ -173,15 +174,20 @@ export function Studio() {
     return () => { active = false; streamRef.current?.close(); };
   }, [loadAgents, loadKnowledgeBases, loadMemories, refreshDashboard, rememberRun, startStream]);
 
-  const inspectRun = useCallback(async (snapshot: RunSnapshot) => {
+  const inspectRunId = useCallback(async (runId: string, fallbackName?: string) => {
     setError(null); setSubmitting(true);
     try {
-      const [loadedRun, loadedEvents, loadedObservability] = await Promise.all([api.getRun(snapshot.run_id), api.listEvents(snapshot.run_id), api.getRunObservability(snapshot.run_id)]);
+      const [loadedRun, loadedEvents, loadedObservability] = await Promise.all([api.getRun(runId), api.listEvents(runId), api.getRunObservability(runId)]);
       setRun(loadedRun); setEvents(loadedEvents); setObservability(loadedObservability); setInput(loadedRun.input); setSelectedId(loadedRun.agent_id); setView("run");
-      updateLocation("run", loadedRun.agent_id, loadedRun.id); rememberRun(loadedObservability, snapshot.agentName); void loadMemories(loadedRun.agent_id);
+      updateLocation("run", loadedRun.agent_id, loadedRun.id);
+      if (loadedRun.run_kind === "normal") rememberRun(loadedObservability, fallbackName);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "The selected run could not be loaded."); }
     finally { setSubmitting(false); }
-  }, [loadMemories, rememberRun, updateLocation]);
+  }, [rememberRun, updateLocation]);
+
+  const inspectRun = useCallback(async (snapshot: RunSnapshot) => {
+    await inspectRunId(snapshot.run_id, snapshot.agentName);
+  }, [inspectRunId]);
 
   const navigate = useCallback((nextView: StudioView) => {
     if (nextView === "run" && !run && history[0]) { void inspectRun(history[0]); return; }
@@ -245,7 +251,8 @@ export function Studio() {
       {view === "agents" && <AgentsPage agents={agents} knowledgeBases={knowledgeBases} runs={history} loading={loading} selectedId={selectedId} onCreate={() => navigate("builder")} onOpen={(agent) => selectAgent(agent.id)} />}
       {view === "builder" && <><AgentBuilder saving={submitting} knowledgeBases={knowledgeBases} knowledgeLoading={knowledgeLoading} knowledgeError={knowledgeError} onReloadKnowledge={() => void loadKnowledgeBases()} onSave={createAgent} /><KnowledgeStudio bases={knowledgeBases} onBasesChange={(bases) => { setKnowledgeBases(bases); setKnowledgeError(null); }} /></>}
       {view === "playground" && <><Playground agents={agents} selected={selected} run={run} events={events} input={input} submitting={submitting} onSelectAgent={selectAgent} onInput={setInput} onRun={runAgent} onCancel={() => void cancelRun()} onBuild={() => navigate("builder")} onInspect={() => navigate("run")} onRequestClear={() => setConfirmClear(true)} />{selected && <MemoryPanel enabled={selected.memory_enabled} loading={memoryLoading} updating={memoryUpdating} error={memoryError} memories={memories} onDelete={(memoryId) => void deleteMemory(memoryId)} onToggle={(enabled) => void toggleMemory(enabled)} />}</>}
-      {view === "run" && <RunDetail run={run} events={events} observability={observability} agent={selected} onBack={() => navigate("playground")} onRerun={rerun} />}
+      {view === "evaluations" && <EvaluationStudio agents={agents} onViewRun={(runId) => void inspectRunId(runId)} />}
+      {view === "run" && <RunDetail run={run} events={events} observability={observability} agent={selected} onBack={() => navigate(run?.run_kind === "evaluation" ? "evaluations" : "playground")} onRerun={rerun} />}
       <ToastRegion toast={toast} onDismiss={() => setToast(null)} />
       <ConfirmDialog open={confirmClear} title="Clear this conversation?" description="This removes the current conversation from the Playground. The persisted run remains available in recent runs." confirmLabel="Clear conversation" danger onConfirm={clearRun} onCancel={() => setConfirmClear(false)} />
     </AppShell>

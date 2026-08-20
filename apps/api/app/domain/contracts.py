@@ -24,6 +24,11 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class RunKind(StrEnum):
+    NORMAL = "normal"
+    EVALUATION = "evaluation"
+
+
 class IngestionState(StrEnum):
     QUEUED = "queued"
     PROCESSING = "processing"
@@ -118,6 +123,7 @@ class RunResult(BaseModel):
     id: UUID
     agent_id: UUID
     status: RunStatus
+    run_kind: RunKind = RunKind.NORMAL
     input: str
     output: str | None = None
     error: str | None = None

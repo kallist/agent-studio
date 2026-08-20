@@ -82,9 +82,16 @@ Create a knowledge base in the web UI, upload a supported document, wait for its
 
 The upload endpoint returns 202 after validation and durable job creation. The local worker handles parsing and embeddings in the background. See [RAG design](docs/RAG_DESIGN.md) for data models, chunking, retrieval, security, benchmark coverage, and production limitations.
 
+## Evaluation
+
+Create deterministic Evaluation Suites in the web UI to run real, isolated Agent executions and
+grade final output, tool selection, RAG provenance, Memory retrieval, steps, and duration. Results
+link back to the persisted Run Detail trace. See [Evaluation design](docs/EVALUATION_DESIGN.md) for
+execution, aggregation, isolation, security, and v1 limitations.
+
 ## Roadmap (not implemented)
 
-Full evaluation workflows and multi-agent orchestration remain out of scope for this vertical slice.
+LLM-as-a-Judge, multi-agent orchestration, and distributed evaluation workers remain out of scope.
 
 ## Security
 

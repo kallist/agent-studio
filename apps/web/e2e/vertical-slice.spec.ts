@@ -426,3 +426,241 @@ test("marks a structured backend 5xx unhealthy and recovers after a successful r
   await expect(connectionPill).toContainText("Connected");
   await expect(page.locator(".error-banner")).toBeHidden();
 });
+
+async function waitForEvaluation(page: Page, evaluationRunId: string) {
+  let evaluation: Record<string, unknown> = {};
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/evaluation-runs/${evaluationRunId}`);
+    expect(response.ok()).toBe(true);
+    evaluation = await response.json() as Record<string, unknown>;
+    return evaluation.status;
+  }).toMatch(/completed|failed|cancelled/);
+  return evaluation;
+}
+
+test("creates and runs a Calculator Evaluation through the UI with a linked real trace", async ({ page }) => {
+  const suffix = Date.now();
+  const agentName = `Evaluation Calculator ${suffix}`;
+  const suiteName = `Calculator Evaluation ${suffix}`;
+  await page.goto("/?view=builder");
+  await page.locator(".builder-form").getByRole("textbox", { name: /^Name/ }).fill(agentName);
+  await page.locator(".builder-form").getByRole("textbox", { name: /^Prompt/ }).fill("Use the calculator tool for exact arithmetic.");
+  await page.getByRole("button", { name: "Save agent" }).click();
+  await expect(page.getByText("Agent saved", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Evaluations", exact: true }).click();
+  await page.getByRole("button", { name: "Create suite", exact: true }).click();
+  await page.getByLabel("Suite name").fill(suiteName);
+  await page.getByRole("combobox", { name: "Agent", exact: true }).selectOption({ label: agentName });
+  await page.getByLabel("Case name").fill("Calculator basic arithmetic");
+  await page.getByLabel("Input").fill("Calculate 128 * 37 + 456");
+  await page.getByLabel("Expected text").fill("5192");
+  await page.getByLabel("Tool name").fill("calculator");
+  await page.getByRole("button", { name: "Save suite" }).click();
+  await expect(page.getByRole("heading", { name: suiteName })).toBeVisible();
+  await page.getByRole("button", { name: "Run evaluation" }).click();
+
+  const summary = page.getByLabel("Evaluation summary");
+  await expect(summary).toContainText("COMPLETED");
+  await expect(summary).toContainText("1 / 1");
+  await expect(summary).toContainText("100%");
+  await expect(page.locator(".evaluation-result-list").getByText("PASS", { exact: true })).toBeVisible();
+  await expect(page.getByText("5192", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "View Run Trace" }).click();
+  await expect(page.getByRole("heading", { name: "Execution timeline" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tool Call" })).toBeVisible();
+  await expect(page.getByText("Calculator", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Back to Evaluations" })).toBeVisible();
+});
+
+test("renders an intentional evaluation failure as FAIL with expected and actual evidence", async ({ page }) => {
+  const suffix = Date.now();
+  const agentResponse = await page.request.post("/api/agents", { data: {
+    name: `Evaluation Failure Agent ${suffix}`,
+    instructions: "Use the calculator.",
+    runtime_mode: "mock",
+    tools: ["calculator"],
+  } });
+  expect(agentResponse.status()).toBe(201);
+  const agent = await agentResponse.json() as { id: string };
+  const suiteResponse = await page.request.post("/api/evaluation-suites", { data: {
+    name: `Intentional Failure ${suffix}`,
+    agent_id: agent.id,
+    cases: [{
+      name: "Wrong expectation",
+      input: "Calculate 128 * 37 + 456",
+      graders: [
+        { type: "run_status" },
+        { type: "exact_match", value: "9999" },
+      ],
+    }],
+  } });
+  expect(suiteResponse.status()).toBe(201);
+  const suite = await suiteResponse.json() as { id: string; name: string };
+
+  await page.goto("/?view=evaluations");
+  await page.getByRole("button", { name: suite.name, exact: true }).click();
+  await page.getByRole("button", { name: "Run evaluation" }).click();
+  await expect(page.getByLabel("Evaluation summary")).toContainText("COMPLETED");
+  await expect(page.locator(".evaluation-result-list").getByText("FAIL", { exact: true })).toBeVisible();
+  await expect(page.locator(".evaluation-result-list").getByText("ERROR", { exact: true })).toHaveCount(0);
+  await expect(page.getByText('{"case_sensitive":true,"value":"9999"}')).toBeVisible();
+  await expect(page.getByText('"5192"')).toBeVisible();
+  await expect(page.getByText("Final output did not match exactly after configured normalization.")).toBeVisible();
+});
+
+test("evaluates completed RAG retrieval and citation provenance", async ({ page }) => {
+  const suffix = Date.now();
+  const baseResponse = await page.request.post("/api/knowledge-bases", { data: {
+    name: `Evaluation RAG ${suffix}`,
+    description: "Evaluation provenance fixture",
+  } });
+  expect(baseResponse.status()).toBe(201);
+  const base = await baseResponse.json() as { id: string };
+  const upload = await page.request.post(`/api/knowledge-bases/${base.id}/documents`, { multipart: {
+    file: {
+      name: "evaluation-e2e.md",
+      mimeType: "text/markdown",
+      buffer: Buffer.from("# Release fact\nThe deterministic launch codename is Blue Harbor."),
+    },
+  } });
+  expect(upload.status()).toBe(202);
+  const uploaded = await upload.json() as { ingestion_job: { id: string } };
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/ingestion-jobs/${uploaded.ingestion_job.id}`);
+    return (await response.json() as { state: string }).state;
+  }).toBe("completed");
+
+  const agentResponse = await page.request.post("/api/agents", { data: {
+    name: `Evaluation RAG Agent ${suffix}`,
+    instructions: "Answer from attached knowledge.",
+    runtime_mode: "mock",
+    tools: ["knowledge_search"],
+    knowledge_base_ids: [base.id],
+  } });
+  const agent = await agentResponse.json() as { id: string };
+  const suiteResponse = await page.request.post("/api/evaluation-suites", { data: {
+    name: `RAG Evaluation ${suffix}`,
+    agent_id: agent.id,
+    cases: [{
+      name: "Grounded source",
+      input: "What is the deterministic launch codename?",
+      graders: [
+        { type: "tool_selected", tool_name: "knowledge_search" },
+        { type: "retrieval_hit", expected_source: "upload://evaluation-e2e.md" },
+        { type: "citation", expected_source: "upload://evaluation-e2e.md" },
+      ],
+    }],
+  } });
+  const suite = await suiteResponse.json() as { id: string };
+  const runResponse = await page.request.post(`/api/evaluation-suites/${suite.id}/runs`);
+  expect(runResponse.status()).toBe(202);
+  const run = await runResponse.json() as { id: string };
+  const evaluation = await waitForEvaluation(page, run.id);
+  expect(evaluation.passed_cases).toBe(1);
+  const resultsResponse = await page.request.get(`/api/evaluation-runs/${run.id}/results`);
+  const results = await resultsResponse.json() as Array<{ status: string; grader_results: Array<{ outcome: string }> }>;
+  expect(results[0].status).toBe("pass");
+  expect(results[0].grader_results.every((grader) => grader.outcome === "pass")).toBe(true);
+});
+
+test("keeps evaluation Memory fixtures isolated from the source Agent", async ({ page }) => {
+  const suffix = Date.now();
+  const agentResponse = await page.request.post("/api/agents", { data: {
+    name: `Evaluation Memory Agent ${suffix}`,
+    instructions: "Use relevant durable memory.",
+    runtime_mode: "mock",
+    tools: [],
+    memory_enabled: true,
+  } });
+  const agent = await agentResponse.json() as { id: string };
+  const suiteResponse = await page.request.post("/api/evaluation-suites", { data: {
+    name: `Memory Evaluation ${suffix}`,
+    agent_id: agent.id,
+    cases: [{
+      name: "Isolated codename",
+      input: "What is the project codename?",
+      setup: { memories: [{ content: "The project codename is Aurora", importance: 0.9 }] },
+      graders: [
+        { type: "memory_retrieved" },
+        { type: "contains", value: "Aurora" },
+      ],
+    }],
+  } });
+  const suite = await suiteResponse.json() as { id: string };
+  const runResponse = await page.request.post(`/api/evaluation-suites/${suite.id}/runs`);
+  const run = await runResponse.json() as { id: string };
+  const evaluation = await waitForEvaluation(page, run.id);
+  expect(evaluation.passed_cases).toBe(1);
+  const sourceMemories = await page.request.get(`/api/agents/${agent.id}/memories`);
+  expect(await sourceMemories.json()).toEqual([]);
+});
+
+test("excludes multiple evaluation Case runs from normal Dashboard telemetry", async ({ page }) => {
+  const beforeResponse = await page.request.get("/api/observability/dashboard");
+  const before = await beforeResponse.json() as { total_runs: number };
+  const suffix = Date.now();
+  const agentResponse = await page.request.post("/api/agents", { data: {
+    name: `Dashboard Isolation Agent ${suffix}`,
+    instructions: "Answer deterministically.",
+    runtime_mode: "mock",
+    tools: [],
+  } });
+  const agent = await agentResponse.json() as { id: string };
+  const suiteResponse = await page.request.post("/api/evaluation-suites", { data: {
+    name: `Dashboard Isolation ${suffix}`,
+    agent_id: agent.id,
+    cases: ["one", "two", "three"].map((input) => ({
+      name: `Case ${input}`,
+      input,
+      graders: [{ type: "run_status" }],
+    })),
+  } });
+  const suite = await suiteResponse.json() as { id: string };
+  const runResponse = await page.request.post(`/api/evaluation-suites/${suite.id}/runs`);
+  const run = await runResponse.json() as { id: string };
+  const evaluation = await waitForEvaluation(page, run.id);
+  expect(evaluation.completed_cases).toBe(3);
+  const afterResponse = await page.request.get("/api/observability/dashboard");
+  const after = await afterResponse.json() as { total_runs: number };
+  expect(after.total_runs).toBe(before.total_runs);
+});
+
+test("keeps Evaluation Run Detail usable at a 390 by 844 viewport", async ({ page }) => {
+  const suffix = Date.now();
+  const agentResponse = await page.request.post("/api/agents", { data: {
+    name: `Mobile Evaluation Agent ${suffix}`,
+    instructions: "Use the calculator.",
+    runtime_mode: "mock",
+    tools: ["calculator"],
+  } });
+  const agent = await agentResponse.json() as { id: string };
+  const suiteResponse = await page.request.post("/api/evaluation-suites", { data: {
+    name: `Mobile Evaluation ${suffix}`,
+    agent_id: agent.id,
+    cases: [{
+      name: "Mobile calculator",
+      input: "Calculate 128 * 37 + 456",
+      graders: [
+        { type: "contains", value: "5192" },
+        { type: "tool_selected", tool_name: "calculator" },
+      ],
+    }],
+  } });
+  const suite = await suiteResponse.json() as { id: string; name: string };
+  const runResponse = await page.request.post(`/api/evaluation-suites/${suite.id}/runs`);
+  const run = await runResponse.json() as { id: string };
+  await waitForEvaluation(page, run.id);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=evaluations");
+  const suiteRow = page.getByRole("row").filter({ hasText: suite.name });
+  await suiteRow.locator(".eval-status").click();
+  await expect(page.getByLabel("Evaluation summary")).toBeVisible();
+  await expect(page.getByLabel("Evaluation summary")).toContainText("100%");
+  await expect(page.getByLabel("Case result filters")).toBeVisible();
+  await expect(page.getByText("Mobile calculator").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Grader results" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});

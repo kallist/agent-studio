@@ -35,6 +35,10 @@ class AgentModel(Base):
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     tools_json: Mapped[str] = mapped_column(Text, nullable=False)
     knowledge_base_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True, default="[]")
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="normal", index=True)
+    source_agent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agents.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     runs: Mapped[list[RunModel]] = relationship(back_populates="agent")
@@ -53,6 +57,9 @@ class RunModel(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
+    run_kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="normal", index=True
+    )
     input: Mapped[str] = mapped_column(Text, nullable=False)
     output: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -193,3 +200,114 @@ class MemoryModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
+class EvaluationSuiteModel(Base):
+    __tablename__ = "evaluation_suites"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EvaluationCaseModel(Base):
+    __tablename__ = "evaluation_cases"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    suite_id: Mapped[str] = mapped_column(
+        ForeignKey("evaluation_suites.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    input: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    graders_json: Mapped[str] = mapped_column(Text, nullable=False)
+    setup_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EvaluationRunModel(Base):
+    __tablename__ = "evaluation_runs"
+    __table_args__ = (
+        UniqueConstraint("request_key", name="uq_evaluation_runs_request_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    suite_id: Mapped[str] = mapped_column(
+        ForeignKey("evaluation_suites.id"), nullable=False, index=True
+    )
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    suite_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    suite_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    request_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    total_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    passed_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pass_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    average_duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p95_duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    grader_metrics_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    active_run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EvaluationCaseResultModel(Base):
+    __tablename__ = "evaluation_case_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "evaluation_run_id",
+            "case_id",
+            name="uq_evaluation_case_results_run_case",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    evaluation_run_id: Mapped[str] = mapped_column(
+        ForeignKey("evaluation_runs.id"), nullable=False, index=True
+    )
+    case_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), nullable=True, index=True)
+    evaluation_agent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agents.id"), nullable=True
+    )
+    status: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    case_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    graders_passed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    graders_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class GraderResultModel(Base):
+    __tablename__ = "grader_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    case_result_id: Mapped[str] = mapped_column(
+        ForeignKey("evaluation_case_results.id"), nullable=False, index=True
+    )
+    grader_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_json: Mapped[str] = mapped_column(Text, nullable=False)
+    actual_json: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
