@@ -1,0 +1,1 @@
+restart-recovery-exclusive-token becomes visible only after activation
