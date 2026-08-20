@@ -143,4 +143,7 @@ Initial product surfaces should eventually be agent definitions, runs, trace tim
 
 ## Deferred decisions
 
-Authentication/tenancy, background job infrastructure, artifact/object storage, production deployment, and the exact evaluation schema are intentionally deferred until the first vertical slice provides evidence. They must not be guessed into the baseline.
+Authentication/tenancy, durable background job infrastructure, artifact/object storage, and
+production deployment remain deferred until measured requirements justify them. The application-
+owned deterministic evaluation schema and local bounded worker are documented in
+`docs/EVALUATION_DESIGN.md`.

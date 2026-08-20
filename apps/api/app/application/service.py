@@ -13,6 +13,7 @@ from app.domain.contracts import (
     AgentRuntime,
     CancellationToken,
     DashboardObservability,
+    RunKind,
     RunObservability,
     RunRequest,
     RunResult,
@@ -112,12 +113,20 @@ class AgentService:
         if not deleted:
             raise EntityNotFoundError(f"Memory '{memory_id}' was not found for this agent.")
 
-    async def create_run(self, agent_id: UUID, request: RunRequest) -> RunResult:
+    async def create_run(
+        self,
+        agent_id: UUID,
+        request: RunRequest,
+        *,
+        run_kind: RunKind = RunKind.NORMAL,
+    ) -> RunResult:
         agent = await self._repositories.get_agent(agent_id)
         runtime = self._runtimes[agent.runtime_mode]
         if not runtime.is_configured:
             raise ProviderNotConfiguredError("OpenAI provider is not configured.")
-        run = await self._repositories.create_run(agent_id, request.input)
+        run = await self._repositories.create_run(
+            agent_id, request.input, run_kind=run_kind
+        )
         cancellation = CancellationToken()
         self._cancellations[run.id] = cancellation
         task = asyncio.create_task(self._execute(run, agent, runtime, cancellation))
@@ -409,6 +418,36 @@ class AgentService:
         return run
 
     async def get_run(self, run_id: UUID) -> RunResult:
+        return await self._repositories.get_run(run_id)
+
+    async def wait_for_terminal(self, run_id: UUID) -> RunResult:
+        task = self._tasks.get(run_id)
+        if task is not None:
+            await asyncio.shield(task)
+        return await self._repositories.get_run(run_id)
+
+    async def fail_interrupted_run(self, run_id: UUID) -> RunResult:
+        run = await self._repositories.get_run(run_id)
+        if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}:
+            return run
+        events = await self._repositories.list_events(run_id)
+        sequence = max((event.sequence for event in events), default=0) + 1
+        message = "Agent run was interrupted by process restart."
+        await self._repositories.finish_run(
+            run_id,
+            RunStatus.FAILED,
+            AgentEvent(
+                run_id=run_id,
+                sequence=sequence,
+                type="run.failed",
+                payload={
+                    "error": message,
+                    "error_category": "process_restart",
+                    "termination_reason": "provider_error",
+                },
+            ),
+            error=message,
+        )
         return await self._repositories.get_run(run_id)
 
     async def list_events(self, run_id: UUID) -> list[AgentEvent]:

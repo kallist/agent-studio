@@ -29,6 +29,104 @@
   --radius: 14px;
 }
 
+/* Evaluation framework */
+.evaluation-suite-table td:first-child { min-width: 210px; }
+.evaluation-suite-table td:first-child small { margin-top: 4px; color: var(--muted); display: block; font-size: 8px; }
+.eval-status { min-width: max-content; padding: 4px 7px; border: 0; border-radius: 999px; color: var(--muted); background: var(--surface-subtle); font-size: 8px; font-weight: 800; letter-spacing: .04em; }
+button.eval-status:not(:disabled) { cursor: pointer; }
+.eval-status.pass, .eval-status.completed { color: var(--green); background: var(--green-soft); }
+.eval-status.fail, .eval-status.failed, .eval-status.error { color: var(--red); background: var(--red-soft); }
+.eval-status.running, .eval-status.queued { color: var(--primary); background: var(--primary-soft); }
+.eval-status.cancelled { color: var(--text-soft); background: #e9ebef; }
+.eval-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #aab0bc; }
+.eval-dot.pass { background: var(--green); }.eval-dot.fail, .eval-dot.error { background: var(--red); }.eval-dot.running, .eval-dot.queued { background: var(--primary); }
+.evaluation-builder { display: grid; gap: 16px; }
+.evaluation-builder .page-header { margin-bottom: 0; }
+.evaluation-form-section { padding: 20px; display: grid; gap: 14px; }
+.evaluation-form-section label, .evaluation-case-editor > label { display: grid; gap: 7px; }
+.evaluation-form-section label > span, .evaluation-case-editor label > span { color: var(--text-soft); font-size: 9px; font-weight: 700; }
+.evaluation-form-section input, .evaluation-form-section select, .evaluation-form-section textarea,
+.evaluation-case-editor input, .evaluation-case-editor select, .evaluation-case-editor textarea { width: 100%; min-width: 0; padding: 10px 11px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: white; font: inherit; font-size: 10px; }
+.evaluation-form-section textarea, .evaluation-case-editor textarea { min-height: 74px; resize: vertical; }
+.evaluation-cases { display: grid; gap: 12px; }
+.evaluation-cases > .section-heading { padding: 0 2px; }
+.evaluation-case-editor { padding: 18px; display: grid; gap: 14px; }
+.evaluation-case-editor > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.evaluation-case-editor > header small { color: var(--primary); font-size: 8px; font-weight: 800; text-transform: uppercase; }
+.evaluation-case-editor > header h3 { margin: 3px 0 0; font-size: 13px; }
+.checkbox-field { align-self: end; min-height: 37px; display: flex !important; align-items: center; gap: 8px !important; }
+.checkbox-field input, .required-check input { width: 15px; height: 15px; accent-color: var(--primary); }
+.grader-list { border-top: 1px solid var(--border); padding-top: 13px; display: grid; gap: 8px; }
+.grader-heading { display: flex; align-items: center; justify-content: space-between; }
+.grader-heading strong { font-size: 10px; }
+.grader-heading button { border: 0; color: var(--primary); background: transparent; display: inline-flex; align-items: center; gap: 5px; font-size: 9px; font-weight: 700; }
+.grader-heading svg { width: 12px; }
+.grader-config { padding: 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); display: grid; grid-template-columns: minmax(130px,.8fr) minmax(150px,1.2fr) auto auto auto; align-items: center; gap: 8px; }
+.grader-config > select, .grader-config > input { background: white; }
+.required-check { min-width: max-content; color: var(--muted); display: flex !important; align-items: center; gap: 5px !important; font-size: 8px; }
+.grader-no-config { color: var(--muted); font-size: 9px; }
+.text-danger { border: 0; color: var(--red); background: transparent; cursor: pointer; font-size: 9px; font-weight: 700; }
+.evaluation-suite-meta { margin-bottom: 16px; padding: 15px 18px; display: flex; align-items: center; gap: 28px; }
+.evaluation-suite-meta > div { display: grid; gap: 3px; }
+.evaluation-suite-meta span { color: var(--muted); font-size: 8px; text-transform: uppercase; }.evaluation-suite-meta strong { font-size: 10px; }
+.evaluation-suite-meta .text-danger { margin-left: auto; }
+.evaluation-case-list { overflow: hidden; }
+.evaluation-case-list > article { padding: 14px 18px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 8px minmax(0,1fr) auto; align-items: center; gap: 12px; }
+.evaluation-case-list article strong { font-size: 10px; }.evaluation-case-list article p { margin: 3px 0; color: var(--text-soft); font-size: 9px; }.evaluation-case-list article small, .evaluation-case-list article > span:last-child { color: var(--muted); font-size: 8px; }
+.evaluation-summary { margin-bottom: 16px; display: grid; grid-template-columns: repeat(8,minmax(84px,1fr)); gap: 8px; }
+.evaluation-summary article { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: white; display: grid; gap: 5px; }
+.evaluation-summary span { color: var(--muted); font-size: 7px; font-weight: 700; text-transform: uppercase; }.evaluation-summary strong { font-size: 13px; overflow-wrap: anywhere; }
+.evaluation-result-layout { display: grid; grid-template-columns: minmax(310px,.75fr) minmax(0,1.25fr); gap: 14px; align-items: start; }
+.evaluation-results, .evaluation-case-detail { overflow: hidden; }
+.evaluation-filters { padding: 0 16px 12px; display: flex; gap: 6px; overflow-x: auto; }
+.evaluation-filters button { padding: 5px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: white; cursor: pointer; font-size: 8px; }
+.evaluation-filters button[aria-pressed="true"] { color: var(--primary); border-color: #c8c0ff; background: var(--primary-soft); }
+.evaluation-result-list { border-top: 1px solid var(--border); }
+.evaluation-result-list > button { width: 100%; padding: 13px 16px; border: 0; border-bottom: 1px solid var(--border); color: var(--text); background: white; cursor: pointer; text-align: left; display: grid; grid-template-columns: 8px minmax(0,1fr) auto; align-items: center; gap: 10px; }
+.evaluation-result-list > button.active { background: #f8f7ff; box-shadow: inset 3px 0 var(--primary); }
+.evaluation-result-list strong { display: block; font-size: 10px; }.evaluation-result-list small { margin-top: 3px; color: var(--muted); display: block; font-size: 8px; }
+.evaluation-empty-filter { padding: 26px 16px; color: var(--muted); text-align: center; font-size: 10px; }
+.evaluation-case-detail { padding: 18px; }
+.evaluation-case-detail > header { padding-bottom: 14px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.evaluation-case-detail h2 { margin: 6px 0 0; font-size: 15px; }
+.case-facts { margin: 16px 0; display: grid; gap: 12px; }
+.case-facts > div { display: grid; grid-template-columns: 120px minmax(0,1fr); gap: 12px; }
+.case-facts dt, .grader-results dt { color: var(--muted); font-size: 8px; text-transform: uppercase; }.case-facts dd { margin: 0; color: var(--text-soft); overflow-wrap: anywhere; font-size: 10px; white-space: pre-wrap; }
+.grader-results h3 { margin: 18px 0 10px; font-size: 11px; }
+.grader-results { display: grid; gap: 8px; }
+.grader-results details { padding: 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); }
+.grader-results summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: 8px minmax(0,1fr) auto; align-items: center; gap: 8px; }.grader-results summary::-webkit-details-marker { display: none; }
+.grader-results summary strong { font-size: 9px; }.grader-results p { margin: 10px 0; color: var(--text-soft); font-size: 9px; }
+.grader-results dl { margin: 0; display: grid; gap: 8px; }.grader-results dl > div { display: grid; grid-template-columns: 70px minmax(0,1fr); gap: 8px; }.grader-results dd { margin: 0; min-width: 0; display: grid; gap: 4px; }.grader-results code { max-width: 100%; color: var(--text-soft); overflow-wrap: anywhere; white-space: pre-wrap; font-size: 8px; }
+
+@media (max-width: 1180px) {
+  .evaluation-summary { grid-template-columns: repeat(4,minmax(84px,1fr)); }
+  .grader-config { grid-template-columns: minmax(120px,1fr) minmax(140px,1.4fr) auto; }
+  .grader-config .required-check, .grader-config .icon-button { justify-self: start; }
+}
+
+@media (max-width: 760px) {
+  .evaluation-suite-table th:nth-child(2), .evaluation-suite-table td:nth-child(2), .evaluation-suite-table th:nth-child(6), .evaluation-suite-table td:nth-child(6) { display: none; }
+  .evaluation-result-layout { grid-template-columns: 1fr; }
+  .evaluation-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .evaluation-suite-meta { align-items: stretch; flex-direction: column; gap: 12px; }
+  .evaluation-suite-meta .text-danger { margin-left: 0; align-self: flex-start; }
+  .grader-config { grid-template-columns: 1fr; }
+  .grader-config .icon-button { justify-self: end; }
+  .case-facts > div { grid-template-columns: 1fr; gap: 4px; }
+}
+
+@media (max-width: 430px) {
+  .evaluation-form-section, .evaluation-case-editor, .evaluation-case-detail { padding: 14px; }
+  .evaluation-case-editor > header { align-items: flex-start; }
+  .evaluation-summary { gap: 6px; }
+  .evaluation-summary article { padding: 10px; }
+  .evaluation-result-list > button { padding: 12px; }
+  .evaluation-case-detail > header { flex-direction: column; }
+  .evaluation-case-detail > header .button { width: 100%; }
+  .grader-results dl > div { grid-template-columns: 1fr; }
+}
+
 * { box-sizing: border-box; }
 html { overflow-x: hidden; background: var(--bg); color-scheme: light; scroll-behavior: smooth; }
 body { margin: 0; min-height: 100vh; overflow-x: hidden; color: var(--text); background: var(--bg); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
@@ -626,6 +724,9 @@ tbody tr:hover { background: #fbfbfd; }
   .recent-runs th:nth-child(3), .recent-runs td:nth-child(3) { width: 82px; }
   .recent-runs th:last-child, .recent-runs td:last-child { width: 44px; padding-left: 5px; padding-right: 5px; }
   .recent-runs td:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
+  .evaluation-suite-table th:nth-child(3), .evaluation-suite-table td:nth-child(3) { display: none; }
+  .evaluation-suite-table th:nth-child(4), .evaluation-suite-table td:nth-child(4) { width: 92px; display: table-cell; }
+  .evaluation-suite-table th:first-child, .evaluation-suite-table td:first-child { width: auto; min-width: 0; overflow: hidden; }
   .agent-card-grid { grid-template-columns: 1fr; }
   .agent-definition-card { min-height: 300px; }
   .builder-form { padding: 18px 14px; }

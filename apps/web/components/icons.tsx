@@ -13,6 +13,7 @@ export type IconName =
   | "dashboard"
   | "database"
   | "error"
+  | "evaluation"
   | "http"
   | "info"
   | "knowledge"
@@ -44,6 +45,7 @@ const paths: Record<IconName, React.ReactNode> = {
   close: <path d="m6 6 12 12M18 6 6 18"/>,
   check: <path d="m5 12 4 4L19 6"/>,
   error: <><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 17h.01"/></>,
+  evaluation: <><path d="M9 11l2 2 4-5"/><path d="M6 3h12v18H6z"/><path d="M9 17h6"/></>,
   info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></>,
   refresh: <><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 0-2 5"/></>,
   chevron: <path d="m9 6 6 6-6 6"/>,

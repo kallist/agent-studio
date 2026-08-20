@@ -11,6 +11,7 @@ function run(status: RunResult["status"] = "completed"): RunResult {
     id: "11111111-1111-1111-1111-111111111111",
     agent_id: "22222222-2222-2222-2222-222222222222",
     status,
+    run_kind: "normal",
     input: "Calculate 128 * 37 + 456",
     output: status === "completed" ? "5192" : null,
     error: status === "failed" ? "Division by zero is not allowed." : status === "cancelled" ? "Agent run was cancelled by the user." : null,
@@ -65,5 +66,11 @@ describe("RunDetail observability", () => {
     expect(screen.getAllByText(status, { exact: true }).length).toBeGreaterThan(0);
     expect(screen.queryByText("5192")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Error" })).toBeInTheDocument();
+  });
+
+  it("returns evaluation traces to Evaluations without offering an unusable rerun", () => {
+    render(<RunDetail run={{ ...run(), run_kind: "evaluation" }} events={events} observability={metrics()} agent={null} onBack={vi.fn()} onRerun={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Back to Evaluations" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run again" })).not.toBeInTheDocument();
   });
 });

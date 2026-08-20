@@ -9,6 +9,7 @@ const navigation: Array<{ id: StudioView; label: string; icon: IconName }> = [
   { id: "agents", label: "Agents", icon: "agents" },
   { id: "builder", label: "Agent Builder", icon: "builder" },
   { id: "playground", label: "Playground", icon: "playground" },
+  { id: "evaluations", label: "Evaluations", icon: "evaluation" },
   { id: "run", label: "Run Detail", icon: "runs" },
 ];
 
@@ -17,6 +18,7 @@ const titles: Record<StudioView, string> = {
   agents: "Agent definitions",
   builder: "Configure an agent",
   playground: "Test and inspect",
+  evaluations: "Regression evaluation",
   run: "Execution detail",
 };
 

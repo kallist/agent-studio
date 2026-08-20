@@ -1,5 +1,6 @@
 export type RuntimeMode = "mock" | "openai";
 export type RunStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+export type RunKind = "normal" | "evaluation";
 export type KnownEventType =
   | "run.started"
   | "step.started"
@@ -47,6 +48,7 @@ export interface RunResult {
   id: string;
   agent_id: string;
   status: RunStatus;
+  run_kind: RunKind;
   input: string;
   output: string | null;
   error: string | null;
@@ -118,6 +120,132 @@ export interface DashboardObservability {
   recent_runs: RunObservability[];
 }
 
+export type EvaluationRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type EvaluationCaseStatus = "pass" | "fail" | "error";
+export type GraderOutcome = EvaluationCaseStatus;
+export type GraderType =
+  | "run_status"
+  | "final_output_non_empty"
+  | "exact_match"
+  | "contains"
+  | "tool_selected"
+  | "tool_not_selected"
+  | "retrieval_hit"
+  | "citation"
+  | "memory_retrieved"
+  | "max_steps"
+  | "max_duration";
+
+export interface GraderConfig {
+  type: GraderType;
+  required: boolean;
+  value: string | null;
+  case_sensitive: boolean;
+  tool_name: string | null;
+  expected_source: string | null;
+  expected_document_id: string | null;
+  expected_status: RunStatus | null;
+  maximum: number | null;
+}
+
+export interface EvaluationMemorySeed {
+  content: string;
+  importance: number;
+}
+
+export interface EvaluationCaseInput {
+  name: string;
+  input: string;
+  enabled: boolean;
+  graders: GraderConfig[];
+  setup: { memories: EvaluationMemorySeed[] };
+}
+
+export interface EvaluationCase extends EvaluationCaseInput {
+  id: string;
+  suite_id: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvaluationSuiteSummary {
+  id: string;
+  name: string;
+  description: string;
+  agent_id: string;
+  revision: number;
+  case_count: number;
+  last_run_id: string | null;
+  last_run_status: EvaluationRunStatus | null;
+  last_pass_rate: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvaluationSuite extends EvaluationSuiteSummary {
+  cases: EvaluationCase[];
+}
+
+export interface GraderMetric {
+  passed: number;
+  total: number;
+  pass_rate: number | null;
+}
+
+export interface EvaluationRun {
+  id: string;
+  suite_id: string;
+  agent_id: string;
+  status: EvaluationRunStatus;
+  suite_revision: number;
+  total_cases: number;
+  completed_cases: number;
+  passed_cases: number;
+  failed_cases: number;
+  error_cases: number;
+  pass_rate: number | null;
+  average_duration_ms: number | null;
+  p95_duration_ms: number | null;
+  grader_metrics: Record<string, GraderMetric>;
+  cancel_requested: boolean;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface GraderResult {
+  id: string;
+  grader_type: GraderType;
+  required: boolean;
+  outcome: GraderOutcome;
+  passed: boolean | null;
+  score: number | null;
+  message: string;
+  expected: unknown;
+  actual: unknown;
+  evidence: Array<Record<string, unknown>>;
+}
+
+export interface EvaluationCaseResult {
+  id: string;
+  evaluation_run_id: string;
+  case_id: string;
+  run_id: string | null;
+  status: EvaluationCaseStatus | null;
+  case_snapshot: Record<string, unknown>;
+  actual_output: string | null;
+  run_status: RunStatus | null;
+  duration_ms: number | null;
+  graders_passed: number;
+  graders_total: number;
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+  grader_results: GraderResult[];
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 
 export type ApiConnectionStatus = "checking" | "connected" | "offline";
@@ -187,6 +315,51 @@ export const api = {
     request<RunObservability>(`/runs/${runId}/observability`),
   getDashboardObservability: () =>
     request<DashboardObservability>("/observability/dashboard"),
+  listEvaluationSuites: () => request<EvaluationSuiteSummary[]>("/evaluation-suites"),
+  getEvaluationSuite: (suiteId: string) =>
+    request<EvaluationSuite>(`/evaluation-suites/${suiteId}`),
+  createEvaluationSuite: (payload: {
+    name: string;
+    description: string;
+    agent_id: string;
+    cases: EvaluationCaseInput[];
+  }) => request<EvaluationSuite>("/evaluation-suites", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }),
+  updateEvaluationSuite: (suiteId: string, payload: {
+    name?: string;
+    description?: string;
+    agent_id?: string;
+  }) => request<EvaluationSuite>(`/evaluation-suites/${suiteId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }),
+  deleteEvaluationSuite: (suiteId: string) =>
+    request<void>(`/evaluation-suites/${suiteId}`, { method: "DELETE" }),
+  createEvaluationCase: (suiteId: string, payload: EvaluationCaseInput) =>
+    request<EvaluationCase>(`/evaluation-suites/${suiteId}/cases`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateEvaluationCase: (caseId: string, payload: Partial<EvaluationCaseInput>) =>
+    request<EvaluationCase>(`/evaluation-cases/${caseId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteEvaluationCase: (caseId: string) =>
+    request<void>(`/evaluation-cases/${caseId}`, { method: "DELETE" }),
+  startEvaluationRun: (suiteId: string, idempotencyKey: string) =>
+    request<EvaluationRun>(`/evaluation-suites/${suiteId}/runs`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+    }),
+  getEvaluationRun: (evaluationRunId: string) =>
+    request<EvaluationRun>(`/evaluation-runs/${evaluationRunId}`),
+  listEvaluationResults: (evaluationRunId: string) =>
+    request<EvaluationCaseResult[]>(`/evaluation-runs/${evaluationRunId}/results`),
+  cancelEvaluationRun: (evaluationRunId: string) =>
+    request<EvaluationRun>(`/evaluation-runs/${evaluationRunId}/cancel`, { method: "POST" }),
   listMemories: (agentId: string) =>
     request<MemoryRecord[]>(`/agents/${agentId}/memories`),
   setMemoryEnabled: (agentId: string, enabled: boolean) =>
