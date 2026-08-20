@@ -12,6 +12,8 @@ from app.domain.contracts import (
     AgentEvent,
     AgentRuntime,
     CancellationToken,
+    DashboardObservability,
+    RunObservability,
     RunRequest,
     RunResult,
     RunStatus,
@@ -29,6 +31,8 @@ from app.memory.contracts import (
 )
 from app.memory.policy import MemoryPolicy
 from app.memory.retriever import MemoryRetriever
+from app.observability.aggregation import aggregate_dashboard, aggregate_run
+from app.observability.redaction import sanitize_event
 from app.persistence.repositories import Repositories
 
 logger = logging.getLogger(__name__)
@@ -143,11 +147,13 @@ class AgentService:
         cancellation: CancellationToken,
     ) -> None:
         sequence = 0
+        loop = asyncio.get_running_loop()
+        run_started_clock = loop.time()
 
         async def emit(event: AgentEvent) -> None:
             nonlocal sequence
             sequence += 1
-            normalized = event.model_copy(update={"sequence": sequence})
+            normalized = sanitize_event(event.model_copy(update={"sequence": sequence}))
             await self._repositories.append_event(normalized)
             await self._broker.publish(normalized)
 
@@ -160,7 +166,14 @@ class AgentService:
         ) -> None:
             nonlocal sequence
             sequence += 1
-            normalized = event.model_copy(update={"sequence": sequence})
+            duration_ms = event.duration_ms
+            if event.type in {"run.completed", "run.failed", "run.cancelled"}:
+                duration_ms = round((loop.time() - run_started_clock) * 1000, 2)
+            normalized = sanitize_event(
+                event.model_copy(
+                    update={"sequence": sequence, "duration_ms": duration_ms}
+                )
+            )
             await self._repositories.finish_run(
                 run.id,
                 status,
@@ -176,7 +189,11 @@ class AgentService:
                 run_id=run.id,
                 sequence=0,
                 type="run.started",
-                payload={"agent_id": str(agent.id), "runtime": agent.runtime_mode.value},
+                payload={
+                    "agent_id": str(agent.id),
+                    "runtime": agent.runtime_mode.value,
+                    "provider": agent.runtime_mode.value,
+                },
             )
         )
         try:
@@ -198,17 +215,22 @@ class AgentService:
                 ]
             )
             if agent.memory_enabled:
+                retrieval_started = loop.time()
                 runtime_memory.long_term = await self._memory_retriever.retrieve(
                     agent.id, run.input
                 )
+                retrieval_duration_ms = round((loop.time() - retrieval_started) * 1000, 2)
                 if runtime_memory.long_term:
                     await emit(
                         AgentEvent(
                             run_id=run.id,
                             sequence=0,
                             type="memory.retrieved",
+                            duration_ms=retrieval_duration_ms,
                             payload={
                                 "count": len(runtime_memory.long_term),
+                                "outcome": "retrieved",
+                                "context_budget_chars": self._memory_policy.max_context_chars,
                                 "matches": [
                                     {
                                         "memory_id": str(match.record.id),
@@ -222,6 +244,29 @@ class AgentService:
                             },
                         )
                     )
+                else:
+                    await emit(
+                        AgentEvent(
+                            run_id=run.id,
+                            sequence=0,
+                            type="memory.retrieval.skipped",
+                            duration_ms=retrieval_duration_ms,
+                            payload={
+                                "count": 0,
+                                "reason": "no_match_or_threshold",
+                                "context_budget_chars": self._memory_policy.max_context_chars,
+                            },
+                        )
+                    )
+            else:
+                await emit(
+                    AgentEvent(
+                        run_id=run.id,
+                        sequence=0,
+                        type="memory.retrieval.skipped",
+                        payload={"count": 0, "reason": "disabled"},
+                    )
+                )
             output = await runtime.run(
                 RuntimeInput(
                     run_id=run.id,
@@ -241,7 +286,7 @@ class AgentService:
                     run_id=run.id,
                     sequence=0,
                     type="run.failed",
-                    payload={"error": message},
+                    payload={"error": message, "error_category": "application_error"},
                 ),
                 error=message,
             )
@@ -254,7 +299,7 @@ class AgentService:
                     run_id=run.id,
                     sequence=0,
                     type="run.failed",
-                    payload={"error": message},
+                    payload={"error": message, "error_category": "unexpected_error"},
                 ),
                 error=message,
             )
@@ -281,6 +326,9 @@ class AgentService:
                                     run_id=run.id,
                                     sequence=sequence + 1,
                                     type="run.completed",
+                                    duration_ms=round(
+                                        (loop.time() - run_started_clock) * 1000, 2
+                                    ),
                                     payload=terminal_payload,
                                 ),
                                 output=final_output,
@@ -299,14 +347,17 @@ class AgentService:
                                 run_id=run.id,
                                 sequence=0,
                                 type="run.failed",
-                                payload={"error": message},
+                                payload={
+                                    "error": message,
+                                    "error_category": "persistence_error",
+                                },
                             ),
                             error=message,
                         )
                         return
                     sequence = committed_events[-1].sequence
                     for committed_event in committed_events:
-                        await self._broker.publish(committed_event)
+                        await self._broker.publish(sanitize_event(committed_event))
                     return
                 await finish(
                     RunStatus.COMPLETED,
@@ -321,6 +372,7 @@ class AgentService:
                 return
             if output.termination_reason == TerminationReason.CANCELLED:
                 terminal_payload["error"] = output.error or "Agent run was cancelled."
+                terminal_payload["error_category"] = "cancelled"
                 await finish(
                     RunStatus.CANCELLED,
                     AgentEvent(
@@ -334,6 +386,7 @@ class AgentService:
                 return
             message = output.error or f"Agent terminated: {output.termination_reason.value}."
             terminal_payload["error"] = message
+            terminal_payload["error_category"] = output.termination_reason.value
             await finish(
                 RunStatus.FAILED,
                 AgentEvent(
@@ -361,6 +414,23 @@ class AgentService:
     async def list_events(self, run_id: UUID) -> list[AgentEvent]:
         await self._repositories.get_run(run_id)
         return await self._repositories.list_events(run_id)
+
+    async def get_run_observability(self, run_id: UUID) -> RunObservability:
+        run = await self._repositories.get_run(run_id)
+        events = await self._repositories.list_events(run_id)
+        return aggregate_run(run, events)
+
+    async def get_dashboard_observability(self) -> DashboardObservability:
+        recent_runs = await self._repositories.list_runs(limit=30)
+        recent_events = await self._repositories.list_events_for_runs(
+            [run.id for run in recent_runs]
+        )
+        status_counts = await self._repositories.count_runs_by_status()
+        return aggregate_dashboard(
+            recent_runs,
+            recent_events,
+            status_counts=status_counts,
+        )
 
     async def stream_events(
         self, run_id: UUID, after_sequence: int = 0

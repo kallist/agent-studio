@@ -10,8 +10,10 @@ from app.tools.registry import ToolExecutor
 class MockRuntime:
     """Deterministic provider using the same bounded loop as production."""
 
-    def __init__(self, tools: ToolExecutor) -> None:
-        self._loop = AgentLoop(MockProvider(), tools, runtime_name="mock")
+    def __init__(self, tools: ToolExecutor, *, blocking_input: str | None = None) -> None:
+        self._loop = AgentLoop(
+            MockProvider(blocking_input=blocking_input), tools, runtime_name="mock"
+        )
 
     @property
     def is_configured(self) -> bool:

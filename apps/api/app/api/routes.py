@@ -6,13 +6,14 @@ from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.application.service import AgentService
 from app.domain.contracts import (
     AgentCreate,
     AgentDefinition,
     AgentEvent,
+    DashboardObservability,
     DocumentUploadAccepted,
     DocumentView,
     IngestionJobView,
@@ -20,6 +21,7 @@ from app.domain.contracts import (
     KnowledgeBaseView,
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
+    RunObservability,
     RunRequest,
     RunResult,
 )
@@ -104,11 +106,12 @@ async def delete_memory(
     agent_id: UUID,
     memory_id: UUID,
     service: ServiceDependency,
-) -> None:
+) -> Response:
     try:
         await service.delete_memory(agent_id, memory_id)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -155,6 +158,23 @@ async def list_events(run_id: UUID, service: ServiceDependency) -> list[AgentEve
         return await service.list_events(run_id)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/observability", response_model=RunObservability)
+async def get_run_observability(
+    run_id: UUID, service: ServiceDependency
+) -> RunObservability:
+    try:
+        return await service.get_run_observability(run_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/observability/dashboard", response_model=DashboardObservability)
+async def get_dashboard_observability(
+    service: ServiceDependency,
+) -> DashboardObservability:
+    return await service.get_dashboard_observability()
 
 
 @router.get("/runs/{run_id}/stream")

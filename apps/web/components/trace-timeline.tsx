@@ -1,3 +1,7 @@
+"use client";
+
+import { useState } from "react";
+
 import { Icon, type IconName } from "@/components/icons";
 import type { AgentEvent, KnownEventType } from "@/lib/api";
 
@@ -15,11 +19,48 @@ const eventMeta: Record<KnownEventType, EventMeta> = {
   "tool.failed": { label: "Tool failed", category: "Error", icon: "error" },
   "step.completed": { label: "Step completed", category: "Runtime", icon: "check" },
   "memory.retrieved": { label: "Memory retrieved", category: "Memory", icon: "memory" },
+  "memory.retrieval.skipped": { label: "Memory retrieval skipped", category: "Memory", icon: "memory" },
   "memory.written": { label: "Memory written", category: "Memory", icon: "memory" },
   "run.completed": { label: "Final answer", category: "Output", icon: "check" },
   "run.failed": { label: "Run failed", category: "Error", icon: "error" },
   "run.cancelled": { label: "Run cancelled", category: "System", icon: "close" },
 };
+
+export type TraceFilter = "all" | "lifecycle" | "runtime" | "tools" | "knowledge" | "memory" | "errors";
+
+const filters: Array<{ id: TraceFilter; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "lifecycle", label: "Lifecycle" },
+  { id: "runtime", label: "Runtime / LLM" },
+  { id: "tools", label: "Tools" },
+  { id: "knowledge", label: "Knowledge / RAG" },
+  { id: "memory", label: "Memory" },
+  { id: "errors", label: "Errors" },
+];
+
+function isKnowledgeEvent(event: AgentEvent): boolean {
+  return typeof event.payload.tool === "string" && event.payload.tool === "knowledge_search";
+}
+
+export function filterTraceEvents(events: AgentEvent[], filter: TraceFilter): AgentEvent[] {
+  if (filter === "all") return events;
+  return events.filter((event) => {
+    if (filter === "lifecycle") return event.type.startsWith("run.") || event.type.startsWith("step.");
+    if (filter === "runtime") return event.type.startsWith("llm.");
+    if (filter === "knowledge") return isKnowledgeEvent(event);
+    if (filter === "tools") return event.type.startsWith("tool.") && !isKnowledgeEvent(event);
+    if (filter === "memory") return event.type.startsWith("memory.");
+    return event.type.includes("failed") || typeof event.payload.error === "string";
+  });
+}
+
+export function TraceFilterBar({ value, onChange }: { value: TraceFilter; onChange: (filter: TraceFilter) => void }) {
+  return (
+    <div className="trace-filters" aria-label="Trace filters">
+      {filters.map((filter) => <button key={filter.id} type="button" aria-pressed={value === filter.id} onClick={() => onChange(filter.id)}>{filter.label}</button>)}
+    </div>
+  );
+}
 
 function metaFor(event: AgentEvent): EventMeta {
   return eventMeta[event.type as KnownEventType] ?? {
@@ -92,12 +133,16 @@ function CitationList({ items }: { items: Array<Record<string, unknown>> }) {
 }
 
 export function TraceTimeline({ events }: { events: AgentEvent[] }) {
+  const [filter, setFilter] = useState<TraceFilter>("all");
+  const visibleEvents = filterTraceEvents(events, filter);
   if (events.length === 0) {
     return <div className="trace-empty"><span className="trace-empty-visual"><Icon name="terminal" /><i /><i /><i /></span><h3>Trace will appear here</h3><p>Each model step and tool call is streamed in execution order.</p></div>;
   }
   return (
-    <ol className="trace-list" aria-label="Live run trace">
-      {events.map((event) => {
+    <>
+      <TraceFilterBar value={filter} onChange={setFilter} />
+      {visibleEvents.length === 0 ? <div className="trace-filter-empty">No events match this filter.</div> : <ol className="trace-list" aria-label="Live run trace">
+      {visibleEvents.map((event) => {
         const meta = metaFor(event);
         const tool = typeof event.payload.tool === "string" ? toolMeta(event.payload.tool) : null;
         const failed = event.type.includes("failed");
@@ -109,10 +154,15 @@ export function TraceTimeline({ events }: { events: AgentEvent[] }) {
             {tool && <span className={`tool-type tool-${tool.tone}`}><Icon name={tool.icon} />{tool.label}</span>}
             <pre>{detail(event)}</pre>
             <CitationList items={eventCitations} />
-            {typeof event.payload.latency_ms === "number" && <span className="latency"><Icon name="clock" />{event.payload.latency_ms} ms</span>}
+            <dl className="trace-event-meta">
+              {(event.step_index ?? event.payload.step) != null && <div><dt>Step</dt><dd>{String(event.step_index ?? event.payload.step)}</dd></div>}
+              {(event.tool_call_id ?? event.payload.call_id) != null && <div><dt>Call</dt><dd><code>{String(event.tool_call_id ?? event.payload.call_id)}</code></dd></div>}
+            </dl>
+            {(event.duration_ms ?? event.payload.latency_ms) != null && <span className="latency"><Icon name="clock" />{String(event.duration_ms ?? event.payload.latency_ms)} ms</span>}
           </article>
         </li>;
       })}
-    </ol>
+      </ol>}
+    </>
   );
 }

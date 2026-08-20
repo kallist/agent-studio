@@ -1114,6 +1114,16 @@ async def test_mock_agent_uses_knowledge_search_and_preserves_citations(
     assert citation["chunk_id"]
     assert citation["source"] == "upload://agent_studio.md"
     assert isinstance(citation["score"], float)
+    assert "content" not in citation
+    assert tool_event["payload"]["result_count"] >= 1
+    assert tool_event["payload"]["retrieval_mode"] == "hybrid"
+    assert tool_event["duration_ms"] >= 0
+    observability = (await client.get(f"/runs/{run_id}/observability")).json()
+    knowledge = next(
+        tool for tool in observability["tools"] if tool["tool_name"] == "knowledge_search"
+    )
+    assert knowledge["duration_ms"] >= 0
+    assert knowledge["output"]["result_count"] >= 1
     assert events[-1]["type"] == "run.completed"
 
 

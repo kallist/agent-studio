@@ -207,7 +207,9 @@ class AgentLoop:
                     emit,
                     runtime_input,
                     "tool.failed",
-                    self._tool_payload(step_index, result, call.arguments),
+                    self._tool_payload(
+                        step_index, result, call.arguments, include_duration=False
+                    ),
                 )
                 await self._emit(
                     emit,
@@ -322,6 +324,8 @@ class AgentLoop:
     ) -> tuple[AgentDecision | None, tuple[TerminationReason, str]]:
         attempts = runtime_input.limits.invalid_output_retries + 1
         for attempt in range(1, attempts + 1):
+            loop = asyncio.get_running_loop()
+            decision_started = loop.time()
             await self._emit(
                 emit,
                 runtime_input,
@@ -352,6 +356,7 @@ class AgentLoop:
                             "step": step_index,
                             "attempt": attempt,
                             "reason": "invalid_output",
+                            "duration_ms": round((loop.time() - decision_started) * 1000, 2),
                         },
                     )
                     continue
@@ -377,7 +382,12 @@ class AgentLoop:
                 emit,
                 runtime_input,
                 "llm.completed",
-                {"step": step_index, "attempt": attempt, "action": decision.action},
+                {
+                    "step": step_index,
+                    "attempt": attempt,
+                    "action": decision.action,
+                    "duration_ms": round((loop.time() - decision_started) * 1000, 2),
+                },
             )
             return decision, (TerminationReason.COMPLETED, "")
         raise AssertionError("unreachable")
@@ -444,10 +454,14 @@ class AgentLoop:
     ) -> T:
         if cancellation is None:
             return await awaitable
-        self._check_cancelled(cancellation)
         operation = asyncio.ensure_future(awaitable)
         cancelled = asyncio.create_task(cancellation.wait())
         try:
+            if cancellation.is_cancelled:
+                operation.cancel()
+                with suppress(asyncio.CancelledError):
+                    await operation
+                raise _CancellationRequested
             done, _ = await asyncio.wait(
                 {operation, cancelled}, return_when=asyncio.FIRST_COMPLETED
             )
@@ -473,28 +487,74 @@ class AgentLoop:
         event_type: EventType,
         payload: dict[str, object],
     ) -> None:
+        step = payload.get("step_index", payload.get("step"))
+        call_id = payload.get("tool_call_id", payload.get("call_id"))
+        duration = payload.get("duration_ms", payload.get("latency_ms"))
         await emit(
             AgentEvent(
                 run_id=runtime_input.run_id,
                 sequence=0,
                 type=event_type,
+                step_index=step if isinstance(step, int) else None,
+                tool_call_id=call_id if isinstance(call_id, str) else None,
+                duration_ms=(
+                    float(duration)
+                    if isinstance(duration, (int, float)) and duration >= 0
+                    else None
+                ),
                 payload=payload,
             )
         )
 
     @staticmethod
     def _tool_payload(
-        step_index: int, result: ToolResult, arguments: dict[str, JsonValue]
+        step_index: int,
+        result: ToolResult,
+        arguments: dict[str, JsonValue],
+        *,
+        include_duration: bool = True,
     ) -> dict[str, object]:
         payload: dict[str, object] = {
             "step": step_index,
             "tool": result.tool_name,
             "call_id": str(result.call_id),
             "arguments": arguments,
-            "latency_ms": result.latency_ms,
         }
+        if include_duration:
+            payload["latency_ms"] = result.latency_ms
         if result.output is not None:
-            payload["result"] = result.output
+            if result.tool_name == "knowledge_search":
+                raw_results = result.output.get("results")
+                citations: list[dict[str, JsonValue]] = []
+                if isinstance(raw_results, list):
+                    for raw in raw_results:
+                        if isinstance(raw, dict):
+                            citations.append(
+                                {
+                                    key: value
+                                    for key, value in raw.items()
+                                    if key != "content"
+                                }
+                            )
+                query = result.output.get("query")
+                algorithm = result.output.get("algorithm")
+                payload.update(
+                    {
+                        "query": query,
+                        "top_k": arguments.get("top_k"),
+                        "retrieval_mode": algorithm,
+                        "result_count": len(citations),
+                        "citations": citations,
+                        "result": {
+                            "query": query,
+                            "algorithm": algorithm,
+                            "result_count": len(citations),
+                            "results": citations,
+                        },
+                    }
+                )
+            else:
+                payload["result"] = result.output
         if result.error is not None:
             payload["error"] = result.error
         return payload

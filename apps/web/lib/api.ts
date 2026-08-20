@@ -12,6 +12,7 @@ export type KnownEventType =
   | "tool.failed"
   | "step.completed"
   | "memory.retrieved"
+  | "memory.retrieval.skipped"
   | "memory.written"
   | "run.completed"
   | "run.failed"
@@ -59,7 +60,62 @@ export interface AgentEvent {
   sequence: number;
   type: EventType;
   timestamp: string;
+  step_index?: number | null;
+  tool_call_id?: string | null;
+  duration_ms?: number | null;
+  usage?: UsageMetrics | null;
   payload: Record<string, unknown>;
+}
+
+export interface UsageMetrics {
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+}
+
+export interface ToolCallObservation {
+  tool_call_id: string;
+  tool_name: string;
+  step_index: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_ms: number | null;
+  status: "running" | "completed" | "failed" | "unknown";
+  input: Record<string, unknown>;
+  output: Record<string, unknown> | null;
+  error_summary: string | null;
+}
+
+export interface RunObservability {
+  run_id: string;
+  agent_id: string;
+  runtime_type: string | null;
+  provider_type: string | null;
+  status: RunStatus;
+  termination_reason: string | null;
+  created_at: string;
+  started_at: string | null;
+  terminal_at: string | null;
+  duration_ms: number | null;
+  event_count: number;
+  step_count: number;
+  tool_calls: { total: number; succeeded: number; failed: number };
+  usage: UsageMetrics;
+  error_category: string | null;
+  error_summary: string | null;
+  event_statistics: Record<string, number>;
+  tools: ToolCallObservation[];
+}
+
+export interface DashboardObservability {
+  total_runs: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  running: number;
+  success_rate: number | null;
+  average_duration_ms: number | null;
+  recent_runs: RunObservability[];
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
@@ -125,7 +181,12 @@ export const api = {
       body: JSON.stringify({ input }),
     }),
   getRun: (runId: string) => request<RunResult>(`/runs/${runId}`),
+  cancelRun: (runId: string) => request<RunResult>(`/runs/${runId}/cancel`, { method: "POST" }),
   listEvents: (runId: string) => request<AgentEvent[]>(`/runs/${runId}/events`),
+  getRunObservability: (runId: string) =>
+    request<RunObservability>(`/runs/${runId}/observability`),
+  getDashboardObservability: () =>
+    request<DashboardObservability>("/observability/dashboard"),
   listMemories: (agentId: string) =>
     request<MemoryRecord[]>(`/agents/${agentId}/memories`),
   setMemoryEnabled: (agentId: string, enabled: boolean) =>
@@ -228,6 +289,7 @@ export const eventTypes: KnownEventType[] = [
   "tool.failed",
   "step.completed",
   "memory.retrieved",
+  "memory.retrieval.skipped",
   "memory.written",
   "run.completed",
   "run.failed",

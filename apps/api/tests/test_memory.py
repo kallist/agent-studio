@@ -127,6 +127,9 @@ async def test_second_run_retrieves_fact_for_same_agent(client: AsyncClient) -> 
     first = await run_to_completion(client, agent["id"], "Remember that project codename is Atlas.")
     assert first["status"] == "completed"
     assert "memory.written" in await event_types(client, first["id"])
+    first_events = (await client.get(f"/runs/{first['id']}/events")).json()
+    written = next(event for event in first_events if event["type"] == "memory.written")
+    assert written["payload"]["write_result"] == "created"
 
     memories = (await client.get(f"/agents/{agent['id']}/memories")).json()
     assert [memory["content"] for memory in memories] == ["project codename is Atlas"]
@@ -141,6 +144,9 @@ async def test_second_run_retrieves_fact_for_same_agent(client: AsyncClient) -> 
     assert match["relevance"] > 0
     assert match["recency"] > 0
     assert match["importance"] == 0.9
+    assert retrieval["duration_ms"] >= 0
+    observability = (await client.get(f"/runs/{second['id']}/observability")).json()
+    assert observability["event_statistics"]["memory.retrieved"] == 1
 
 
 @pytest.mark.asyncio
@@ -161,6 +167,8 @@ async def test_deleted_memory_is_not_retrieved(client: AsyncClient) -> None:
 
     deleted = await client.delete(f"/agents/{agent['id']}/memories/{memories[0]['id']}")
     assert deleted.status_code == 204
+    assert deleted.content == b""
+    assert "content-type" not in deleted.headers
     assert (await client.get(f"/agents/{agent['id']}/memories")).json() == []
 
     run = await run_to_completion(client, agent["id"], "What is the project codename?")
@@ -348,6 +356,12 @@ async def test_enabled_memory_and_terminal_state_commit_together(client: AsyncCl
         "memory.written",
         "run.completed",
     ]
+    events = (await client.get(f"/runs/{run['id']}/events")).json()
+    written, completed = events[-2:]
+    assert datetime.fromisoformat(written["timestamp"]) <= datetime.fromisoformat(
+        completed["timestamp"]
+    )
+    assert completed["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio

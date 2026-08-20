@@ -54,9 +54,10 @@ async def test_create_list_run_retrieve_and_persist_trace(client: AsyncClient) -
     events_response = await client.get(f"/runs/{run['id']}/events")
     assert events_response.status_code == 200
     events = events_response.json()
-    assert [event["sequence"] for event in events] == list(range(1, 14))
+    assert [event["sequence"] for event in events] == list(range(1, 15))
     assert [event["type"] for event in events] == [
         "run.started",
+        "memory.retrieval.skipped",
         "step.started",
         "llm.started",
         "llm.completed",
@@ -70,7 +71,7 @@ async def test_create_list_run_retrieve_and_persist_trace(client: AsyncClient) -
         "step.completed",
         "run.completed",
     ]
-    assert events[6]["payload"]["result"] == {"result": "5192"}
+    assert events[7]["payload"]["result"] == {"result": "5192"}
     assert events[-1]["payload"]["termination_reason"] == "completed"
 
     stream_response = await client.get(f"/runs/{run['id']}/stream")

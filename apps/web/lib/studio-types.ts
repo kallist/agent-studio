@@ -1,11 +1,9 @@
-import type { RunResult } from "@/lib/api";
+import type { RunObservability } from "@/lib/api";
 
 export type StudioView = "dashboard" | "agents" | "builder" | "playground" | "run";
 
-export interface RunSnapshot extends RunResult {
+export interface RunSnapshot extends RunObservability {
   agentName: string;
-  latencyMs: number | null;
-  toolCalls: number;
 }
 
 export interface ToastMessage {
