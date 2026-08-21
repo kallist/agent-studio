@@ -29,7 +29,7 @@ from app.memory.keys import normalized_memory_key
 from app.memory.policy import MemoryPolicy
 from app.memory.retriever import MemoryRetriever
 from app.memory.store import SqlAlchemyMemoryStore
-from app.persistence.database import build_database, settings
+from app.persistence.database import build_database, database_backend, settings
 from app.persistence.models import Base
 from app.persistence.repositories import Repositories
 from app.runtime.agents_sdk import AgentsSdkRuntime
@@ -68,6 +68,7 @@ def create_app(
     database_url: str | None = None, knowledge_storage_path: str | None = None
 ) -> FastAPI:
     resolved_database_url = database_url or settings.database_url
+    backend = database_backend(resolved_database_url)
     engine, sessions = build_database(resolved_database_url)
     embeddings: EmbeddingProvider
     if settings.embedding_provider == "openai":
@@ -80,8 +81,8 @@ def create_app(
         embeddings = DeterministicEmbeddingProvider()
     knowledge_repository = KnowledgeRepository(sessions)
     vector_store = (
-        PgVectorStore(sessions)
-        if resolved_database_url.startswith("postgresql")
+        PgVectorStore(sessions, dimensions=embeddings.dimensions)
+        if backend == "postgresql"
         else SqlAlchemyVectorStore(sessions)
     )
     knowledge_service = KnowledgeService(
@@ -136,20 +137,29 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-            await connection.run_sync(_apply_lightweight_schema_migrations)
-        await vector_store.initialize()
-        app.state.agent_service = service
-        app.state.knowledge_service = knowledge_service
-        app.state.evaluation_service = evaluation_service
-        app.state.evaluation_worker = evaluation_worker
-        await worker.start()
-        await evaluation_worker.start()
-        yield
-        await evaluation_worker.stop()
-        await worker.stop()
-        await engine.dispose()
+        worker_started = False
+        evaluation_worker_started = False
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+                await connection.run_sync(_apply_lightweight_schema_migrations)
+            await vector_store.initialize()
+            app.state.agent_service = service
+            app.state.knowledge_service = knowledge_service
+            app.state.evaluation_service = evaluation_service
+            app.state.evaluation_worker = evaluation_worker
+            app.state.database_sessions = sessions
+            await worker.start()
+            worker_started = True
+            await evaluation_worker.start()
+            evaluation_worker_started = True
+            yield
+        finally:
+            if evaluation_worker_started:
+                await evaluation_worker.stop()
+            if worker_started:
+                await worker.stop()
+            await engine.dispose()
 
     app = FastAPI(title="Agent Studio API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(

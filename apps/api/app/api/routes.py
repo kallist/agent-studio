@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Annotated, cast
 from uuid import UUID
@@ -17,6 +18,9 @@ from fastapi import (
     status,
 )
 from fastapi.responses import Response, StreamingResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.application.service import AgentService
 from app.domain.contracts import (
@@ -58,6 +62,7 @@ from app.memory.contracts import MemoryRecord, MemorySettings, MemorySettingsUpd
 from app.persistence.database import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def get_service(request: Request) -> AgentService:
@@ -82,7 +87,14 @@ EvaluationServiceDependency = Annotated[EvaluationService, Depends(get_evaluatio
 
 
 @router.get("/health")
-async def health() -> dict[str, str]:
+async def health(request: Request) -> dict[str, str]:
+    sessions = cast(async_sessionmaker[AsyncSession], request.app.state.database_sessions)
+    try:
+        async with sessions() as session:
+            await session.execute(text("SELECT 1"))
+    except (SQLAlchemyError, OSError) as exc:
+        logger.warning("Database readiness check failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Database is unavailable.") from exc
     return {"status": "ok"}
 
 

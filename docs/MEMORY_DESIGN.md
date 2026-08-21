@@ -153,4 +153,9 @@ The backend suite verifies:
 - fixed-clock ranking covers relevance, importance, recency, threshold, ties, result limit, and context budget;
 - a combined RAG/Memory run preserves retrieval, `knowledge_search`, citations, memory write, and normalized event order.
 
+The PostgreSQL integration suite uses independent real connections at `READ COMMITTED` and
+deterministically validates both row-lock orderings, complete concurrent Run deduplication, and
+atomic rollback after terminal-event failure. The `SELECT ... FOR UPDATE` behavior is no longer a
+SQL-compilation-only claim. SQLite continues to run the complete default backend suite.
+
 The frontend component test verifies that saved facts render and that delete and disable controls invoke their handlers.

@@ -4,8 +4,10 @@ import asyncio
 from uuid import uuid4
 
 import pytest
-from httpx import AsyncClient
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
+from app.api.routes import router
 from app.persistence.database import Settings
 from app.runtime.providers import MockProvider
 
@@ -116,6 +118,31 @@ async def test_security_headers_and_targeted_validation_errors_are_safe(
         },
     )
     assert "access-control-allow-origin" not in malicious_origin.headers
+
+
+@pytest.mark.asyncio
+async def test_health_translates_raw_driver_connection_failure_to_safe_503() -> None:
+    class UnavailableSession:
+        async def __aenter__(self) -> UnavailableSession:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def execute(self, *args: object) -> None:
+            raise ConnectionRefusedError("driver connection refused")
+
+    app = FastAPI()
+    app.state.database_sessions = lambda: UnavailableSession()
+    app.include_router(router)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as http:
+        response = await http.get("/health")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Database is unavailable."}
+    assert "driver connection refused" not in response.text
 
 
 @pytest.mark.parametrize("field", ["cors_origins", "allowed_hosts"])

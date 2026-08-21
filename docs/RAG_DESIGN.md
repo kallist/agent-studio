@@ -80,11 +80,20 @@ The character-based strategy is provider-neutral and avoids a tokenizer dependen
 - `DeterministicEmbeddingProvider`: signed feature hashing over word, CJK bigram, and character-trigram features. It is stable, local, inexpensive, and useful for deterministic tests. It is not claimed to match production neural semantic quality.
 - `OpenAIEmbeddingProvider`: async batched calls through the official OpenAI client. It is opt-in and never required for the main tests.
 
-`VectorStore` owns initialization, upsert, deletion, and filtered similarity search. SQLite uses a persisted-vector fallback with in-process cosine ranking. PostgreSQL uses a separate `rag_vectors` table with the `vector` type and the `<=>` cosine-distance operator. No pgvector operator crosses into the service or domain contracts.
+`VectorStore` owns initialization, upsert, deletion, and filtered similarity search. SQLite uses a
+persisted-vector fallback with in-process cosine ranking. PostgreSQL uses a separate `rag_vectors`
+table with a provider-sized `vector(n)` column and the `<=>` cosine-distance operator. The
+deterministic provider uses `vector(256)`; dimension mismatch fails before a vector write and leaves
+the ingestion job terminal/failed. PostgreSQL stores only embedding metadata in the portable
+`embeddings` row (`vector_json` is null) and stores the actual vector in pgvector. No pgvector
+operator crosses into the service or domain contracts.
 
 ## Retrieval algorithm
 
-Semantic retrieval embeds the query, filters by knowledge-base and optional exact `document_id`, `source`, or `filename`, then ranks by cosine similarity. `top_k` is constrained to 1-20.
+Semantic retrieval embeds the query, filters by knowledge-base and optional exact `document_id`,
+`source`, or `filename`, then ranks by cosine similarity. `top_k` is constrained to 1-20. Both
+adapters expose the same application score semantics: higher is better. PostgreSQL converts cosine
+distance at the adapter boundary with `score = 1 - distance`.
 
 Hybrid retrieval is enabled by default. It obtains a wider semantic candidate list, computes a lightweight lexical overlap score using word and CJK-bigram terms, and ranks the union with:
 
@@ -146,7 +155,13 @@ This is a regression benchmark, not a statistically meaningful retrieval evaluat
 - The local worker is process-local. Within one shared database, PostgreSQL document-row locking and the SQLite atomic conditional claim prevent two workers from processing one document concurrently. Multiple API replicas still need a durable broker with delivery guarantees, bounded retries, and operational reconciliation.
 - Local file storage is not shared or transactional with the database. Production should use object storage plus cleanup/reconciliation jobs.
 - SQLite cosine search loads candidate vectors into the API process and is intended only for local/demo scale.
-- The pgvector adapter has no ANN index yet. Its completed-generation SQL predicate has a construction-level regression test, but a live PostgreSQL/pgvector integration was not added by this fix. Add HNSW/IVFFlat only after corpus and latency measurements justify it.
+- PostgreSQL creates a real HNSW index with `vector_cosine_ops`. Integration verifies the index
+  exists and validates retrieval correctness, but deliberately does not assert a planner-specific
+  `EXPLAIN` result for small corpora. Large-corpus plan and latency tuning remain future performance
+  work.
+- PostgreSQL 17/pgvector integration covers real vector writes, semantic/hybrid retrieval,
+  filters/citations, failed/activation/replacement generations, dirty-row invisibility, and
+  document-row claim concurrency. A 1000-chunk sanity test is not a production load benchmark.
 - The pre-Alembic startup migration bridges the agent attachment column and adds/backfills `chunks.ingestion_job_id`. Legacy chunks are exposed only when the newest known job completed; ambiguous failed/processing replacements remain hidden. Establish Alembic before further production schema evolution.
 - There is no OCR, table-aware PDF parsing, deduplication, public document deletion/re-ingestion endpoint, or tenant authorization yet. The generation model and tests cover replacement consistency before that endpoint is introduced.
 - Hybrid lexical scoring is simple overlap rather than BM25 and uses fixed weights.
