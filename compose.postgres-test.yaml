@@ -1,0 +1,23 @@
+name: agent-studio-postgres-test
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: "no"
+    environment:
+      POSTGRES_DB: agent_studio_test
+      POSTGRES_USER: agent_studio_test
+      POSTGRES_PASSWORD: ${POSTGRES_TEST_PASSWORD:?set POSTGRES_TEST_PASSWORD for the disposable test database}
+    ports:
+      - "127.0.0.1:${POSTGRES_TEST_PORT:-55432}:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./infra/postgres-test-init.sql:/docker-entrypoint-initdb.d/10-no-vector-test.sql:ro

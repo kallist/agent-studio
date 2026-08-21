@@ -238,8 +238,11 @@ grader rejection, and the existing Calculator/RAG/Memory/observability/evaluatio
 
 Real OpenAI behavior: **NOT TESTED** by the default suite.
 
-Live PostgreSQL/pgvector behavior: **NOT TESTED** unless the optional Compose path is reported
-separately.
+Live PostgreSQL/pgvector behavior is tested with bound injection-shaped filters, fixed-dimension
+vector writes, completed-only retrieval, redaction before Run/RunEvent/Evaluation persistence, a
+loopback/disposable test database guard, explicit unavailable-database failure, and an independent
+role that cannot create the vector extension. TLS, managed-database IAM, at-rest encryption, backup
+policy, and production database roles remain **NOT TESTED**.
 
 ## 20. Known limitations
 

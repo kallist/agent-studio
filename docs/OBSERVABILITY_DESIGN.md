@@ -116,7 +116,9 @@ and UI filtering. No latency assertion depends on sleeping or a minimum wall-clo
 ## Current limitations
 
 - Real OpenAI network usage translation is not validated in the default no-key test path.
-- Live PostgreSQL/pgvector observability behavior requires the optional Compose integration path.
+- Live PostgreSQL/pgvector Observability is validated through persisted Calculator, RAG, Memory,
+  and Evaluation workflows, including tool correlation, durations, Dashboard isolation, and
+  redaction before persistence. Production-scale analytics performance remains untested.
 - Metrics are read-time projections suitable for the current data volume, not a large analytics
   warehouse.
 - Trace JSON export is deferred because it adds no debugging capability beyond the redacted REST

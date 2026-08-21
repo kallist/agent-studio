@@ -220,7 +220,10 @@ browser workflows with MockRuntime.
 - Hidden evaluation Agent clones are retained for lineage and currently have no retention policy.
 - There is no baseline-comparison UI in v1.
 - Real OpenAI evaluation is NOT TESTED.
-- Live PostgreSQL/pgvector evaluation is NOT TESTED unless separately reported.
+- PostgreSQL 17/pgvector Evaluation persistence and execution are tested with Suite/Case CRUD,
+  Calculator PASS, intentional business FAIL, idempotent start, isolated Evaluation Memory,
+  Dashboard isolation, real Run/RunEvent linkage, persisted aggregates, and rollback of all
+  aggregate columns after an injected PostgreSQL transaction failure.
 
 ## 22. Future LLM-as-Judge and OpenAI Evals integration
 

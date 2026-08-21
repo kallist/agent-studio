@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -43,5 +44,20 @@ settings = Settings()
 
 
 def build_database(url: str) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
-    engine = create_async_engine(url)
+    engine = create_async_engine(url, pool_pre_ping=True)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+def database_backend(url: str) -> str:
+    """Validate and return the explicitly supported async database backend."""
+
+    parsed = make_url(url)
+    backend = parsed.get_backend_name()
+    driver = parsed.get_driver_name()
+    supported_drivers = {
+        "sqlite": "aiosqlite",
+        "postgresql": "asyncpg",
+    }
+    if supported_drivers.get(backend) != driver:
+        raise ValueError("Unsupported database URL; use sqlite+aiosqlite or postgresql+asyncpg.")
+    return backend

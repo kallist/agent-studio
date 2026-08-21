@@ -123,9 +123,17 @@ Persists run identity, agent version, status, timestamps, input/output reference
 
 ## Data architecture
 
-PostgreSQL is the system of record for agent definitions, versions, runs, events, memories, knowledge metadata, evaluations, and tool configuration. pgvector stores embeddings behind `VectorStore`. Large source files may later move to object storage, referenced by metadata in PostgreSQL.
+PostgreSQL is the production-like development system of record for agent definitions, runs, events,
+memories, knowledge metadata, evaluations, and tool configuration. pgvector stores fixed-dimension
+embeddings behind `VectorStore`; this path is verified against PostgreSQL 17 and the real vector
+extension. Large source files may later move to object storage, referenced by metadata in
+PostgreSQL.
 
-The first version uses Docker Compose for local PostgreSQL/pgvector. SQLite may be introduced only as a documented temporary adapter when PostgreSQL blocks a vertical slice; the repository ports remain unchanged.
+SQLite remains the documented zero-infrastructure local/demo adapter and default when no
+`DATABASE_URL` is supplied. PostgreSQL is selected only by an explicit
+`postgresql+asyncpg://...` URL and never silently falls back to SQLite. Both adapters preserve the
+same repository/store boundaries. Docker Compose supplies only PostgreSQL/pgvector development and
+integration-test infrastructure; application containerization remains deferred.
 
 ## Frontend architecture
 
