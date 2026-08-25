@@ -37,6 +37,17 @@ postgresql+asyncpg://USER:PASSWORD@127.0.0.1:5432/DATABASE
 repository sessions are context-managed, failed transactions roll back, and application shutdown or
 failed startup disposes the engine.
 
+The default production-like Compose runtime exposes the same URL through `DATABASE_URL_FILE`. A
+one-shot, no-network initializer generates the password and encoded DSN in a named volume;
+PostgreSQL consumes `POSTGRES_PASSWORD_FILE`, API reads the DSN file, and Web receives neither.
+Direct `DATABASE_URL` remains the non-Docker/test compatibility entry. Configuring direct and file
+forms together fails closed.
+
+Unlike the disposable `compose.postgres-test.yaml` service below, production-like `compose.yaml`
+does not publish port 5432 and stores PostgreSQL data in a named volume. Normal restart, image
+rebuild, and `compose down` preserve that volume. Deletion requires the explicit project-scoped
+purge workflow documented in `docs/CONTAINER_RUNTIME.md`.
+
 ## Schema initialization
 
 Fresh startup runs SQLAlchemy `create_all`, the existing small pre-Alembic compatibility migrations,

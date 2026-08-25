@@ -1,24 +1,156 @@
 name: agent-studio
 
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
+  secret-init:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: agent-studio-api:task12
+    restart: "no"
+    user: "0:0"
+    command: ["python", "-m", "app.persistence.runtime_secrets"]
+    environment:
+      APP_GID: "10001"
+      APP_UID: "10001"
+      DATABASE_HOST: db
+      DATABASE_PORT: "5432"
+      KNOWLEDGE_STORAGE_PATH: /var/lib/agent-studio/knowledge
+      POSTGRES_DB: ${POSTGRES_DB-agent_studio}
+      POSTGRES_USER: ${POSTGRES_USER-agent_studio}
+      RUNTIME_SECRET_DIRECTORY: /run/agent-studio-secrets
+    network_mode: none
+    volumes:
+      - knowledge_data:/var/lib/agent-studio/knowledge
+      - runtime_secrets:/run/agent-studio-secrets
+    logging: *default-logging
+
   db:
     image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-agent_studio}
-      POSTGRES_USER: ${POSTGRES_USER:-agent_studio}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the local .env file}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      POSTGRES_DB: ${POSTGRES_DB-agent_studio}
+      POSTGRES_USER: ${POSTGRES_USER-agent_studio}
+      POSTGRES_PASSWORD_FILE: /run/agent-studio-secrets/postgres_password
+    depends_on:
+      secret-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD-SHELL
         - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
       interval: 5s
       timeout: 5s
-      retries: 12
+      retries: 24
+      start_period: 10s
     volumes:
-      - agent_studio_pg_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - runtime_secrets:/run/agent-studio-secrets:ro
+    networks:
+      - db_network
+    stop_grace_period: 30s
+    logging: *default-logging
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: agent-studio-api:task12
+    restart: unless-stopped
+    init: true
+    environment:
+      ALLOWED_HOSTS: 127.0.0.1,localhost,api
+      APP_ENV: production-like
+      CORS_ORIGINS: http://127.0.0.1:${WEB_PORT-3000},http://localhost:${WEB_PORT-3000}
+      DATABASE_URL_FILE: /run/agent-studio-secrets/database_url
+      EMBEDDING_PROVIDER: local
+      EVALUATION_WORKER_COUNT: "1"
+      KNOWLEDGE_STORAGE_PATH: /var/lib/agent-studio/knowledge
+      KNOWLEDGE_WORKER_COUNT: "1"
+      LLM_PROVIDER: openai
+      MOCK_PROVIDER_BLOCK_INPUT: __playwright_wait_for_cancel__
+      OPENAI_AGENTS_DISABLE_TRACING: "1"
+    ports:
+      - "127.0.0.1:${API_PORT-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    volumes:
+      - knowledge_data:/var/lib/agent-studio/knowledge
+      - runtime_secrets:/run/agent-studio-secrets:ro
+    networks:
+      - app_network
+      - db_network
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 45s
+    logging: *default-logging
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: agent-studio-web:task12
+    restart: unless-stopped
+    init: true
+    environment:
+      API_PROXY_URL: http://api:8000
+      HOSTNAME: 0.0.0.0
+      NODE_ENV: production
+      PORT: "3000"
+    ports:
+      - "127.0.0.1:${WEB_PORT-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - require('node:http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    networks:
+      - app_network
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging: *default-logging
+
+networks:
+  app_network:
+  db_network:
+    internal: true
 
 volumes:
-  agent_studio_pg_data:
+  knowledge_data:
+  postgres_data:
+  runtime_secrets:

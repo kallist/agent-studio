@@ -20,7 +20,49 @@ The first runnable vertical slice now supports:
 See [ADR-001](docs/ADR/001-agent-runtime.md) for the accepted hybrid runtime boundary.
 See [Memory System v1](docs/MEMORY_DESIGN.md) for write, retrieval, expiration, deletion, and isolation policy.
 
-## Quick start
+## Docker quick start — recommended
+
+Prerequisite: Docker Desktop, or Docker Engine with Docker Compose. No Python, Node.js, pnpm,
+PostgreSQL, or LLM API key is required for the deterministic Mock demo.
+
+```powershell
+docker compose up --build -d
+```
+
+Open `http://127.0.0.1:3000`. The stack runs the Next.js production server, one production Uvicorn
+process, and PostgreSQL 17 with pgvector. Web and API host ports bind only to loopback; PostgreSQL is
+available only on the internal Docker network. The first start generates a project-scoped database
+password in a Docker named volume rather than placing it in Compose source or container environment.
+
+On Windows, the checked helper validates Docker, ports, provider configuration, Compose, and health:
+
+```powershell
+.\scripts\docker-up.ps1
+.\scripts\docker-down.ps1
+```
+
+Normal `docker compose down` and `docker-down.ps1` preserve PostgreSQL, uploaded RAG sources, and
+runtime-secret volumes. `docker-down.ps1 -PurgeData` is destructive and requires typing an explicit
+project-name confirmation before it removes only this Compose project's volumes.
+
+DeepSeek is opt-in. Supply `DEEPSEEK_API_KEY` to the host process and run:
+
+```powershell
+.\scripts\docker-up.ps1 -Provider deepseek
+```
+
+The helper streams the host value over stdin to a removed-after-use initializer, which stores only
+the selected key in a project-scoped named volume mounted read-only only by API. It is not a build
+argument, command-line value, source file, or persistent container environment value. OpenAI has the
+equivalent `-Provider openai` configuration; real OpenAI container execution remains **NOT TESTED**.
+See [Container runtime](docs/CONTAINER_RUNTIME.md) for provider helpers, secrets, persistence,
+failure behavior, and known limitations.
+
+This is a **containerized production-like local runtime**, not a production-ready internet service.
+Authentication, RBAC, multi-tenancy, managed TLS/ingress, backups, horizontal scaling, distributed
+workers, load certification, and cloud deployment are not implemented.
+
+## Local development quick start
 
 Prerequisites: Node.js 24+, pnpm 10+, and Python 3.12+.
 
@@ -44,15 +86,16 @@ Open `http://127.0.0.1:3000`.
 The default database is the ignored `agent_studio.db` SQLite file. An explicit PostgreSQL URL is
 never silently replaced with SQLite if the connection or pgvector initialization fails.
 
-## PostgreSQL + pgvector development
+## PostgreSQL + pgvector host development
 
-The existing Compose service supplies only PostgreSQL/pgvector infrastructure; it does not
-containerize the API or web app.
+For host-process development against the disposable PostgreSQL test service, use the isolated
+configuration documented in `docs/POSTGRESQL_PGVECTOR.md`. The default `compose.yaml` now owns the
+complete production-like stack and intentionally does not publish PostgreSQL port 5432.
 
 ```powershell
-$env:POSTGRES_PASSWORD = "choose-a-local-development-password"
-docker compose up -d db --wait
-$env:DATABASE_URL = "postgresql+asyncpg://agent_studio:choose-a-local-development-password@127.0.0.1:5432/agent_studio"
+$env:POSTGRES_TEST_PASSWORD = "local-integration-only"
+docker compose -f compose.postgres-test.yaml up -d --wait
+$env:DATABASE_URL = "postgresql+asyncpg://agent_studio_test:local-integration-only@127.0.0.1:55432/agent_studio_test"
 .\.venv\Scripts\uvicorn.exe app.main:app --app-dir apps/api --host 127.0.0.1 --port 8000
 ```
 

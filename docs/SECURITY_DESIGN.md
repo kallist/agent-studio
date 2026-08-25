@@ -182,6 +182,27 @@ Server logs retain stack traces for debugging but log IDs rather than prompts, M
 documents, credentials, or database URLs. Redaction is defense in depth, not permission to log
 sensitive values.
 
+Container runtime logs remain stdout/stderr at INFO with bounded Docker rotation. Verbose provider
+SDK diagnostics are off. Database URLs, runtime-secret contents, Authorization values, user/RAG/
+Memory bodies, and provider payloads are not startup or health log fields.
+
+### Container runtime trust boundary
+
+The production-like Compose topology binds Web/API host ports only to loopback and does not publish
+PostgreSQL. Web and API share an app network; API and PostgreSQL share a separate internal network.
+Web receives neither the DB runtime-secret volume nor provider-secret volume. API/Web are stable
+non-root users with all Linux capabilities dropped, no-new-privileges, read-only roots, bounded
+`/tmp`, no host networking, no privileged mode, no source bind mount, and no Docker socket.
+
+A no-network one-shot initializer creates the project-scoped PostgreSQL password and password-bearing
+DSN in a Docker named volume; DB/API mount it read-only. For provider profiles, the helper sends the
+selected host key to a no-network initializer over stdin; that removed-after-use container writes a
+separate project volume mounted read-only only by API. The value is not stored in image layers,
+Compose source, command arguments, or persistent container environments. Direct values and
+corresponding `*_FILE` settings are mutually exclusive. Missing, empty, unreadable, oversized, or
+ambiguous files fail without echoing content. This is local secret isolation, not a cloud
+secret-manager design.
+
 ## 16. Resource limits
 
 | Input/work | Bound |

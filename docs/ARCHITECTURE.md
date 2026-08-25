@@ -142,10 +142,22 @@ extension. Large source files may later move to object storage, referenced by me
 PostgreSQL.
 
 SQLite remains the documented zero-infrastructure local/demo adapter and default when no
-`DATABASE_URL` is supplied. PostgreSQL is selected only by an explicit
+`DATABASE_URL` is supplied outside Docker. PostgreSQL is selected only by an explicit
 `postgresql+asyncpg://...` URL and never silently falls back to SQLite. Both adapters preserve the
-same repository/store boundaries. Docker Compose supplies only PostgreSQL/pgvector development and
-integration-test infrastructure; application containerization remains deferred.
+same repository/store boundaries. The default container runtime selects PostgreSQL exclusively and
+fails closed; SQLite remains only the non-Docker local fallback.
+
+## Container runtime topology
+
+The production-like Compose stack has two networks. `web` and `api` share the normal app network;
+`api` and `db` share an internal DB network. PostgreSQL is not published to the host, and Web never
+receives DB or provider credentials. Host bindings are loopback-only for Web and API. Browser
+requests and SSE stay same-origin through Next.js `/api` rewrites to Docker-internal `api:8000`.
+
+FastAPI lifespan remains the sole current-schema and pgvector initialization boundary. The stack
+runs one API process because ingestion and Evaluation workers are application-local; multiprocess
+or horizontal scaling is not validated. PostgreSQL state, uploaded RAG sources, and generated DB
+credentials live in separate named volumes. See `docs/CONTAINER_RUNTIME.md`.
 
 ## Frontend architecture
 
@@ -163,7 +175,8 @@ Initial product surfaces should eventually be agent definitions, runs, trace tim
 
 ## Deferred decisions
 
-Authentication/tenancy, durable background job infrastructure, artifact/object storage, and
-production deployment remain deferred until measured requirements justify them. The application-
+Authentication/tenancy, durable background job infrastructure, artifact/object storage, formal
+schema migrations, managed deployment, and internet-service readiness remain deferred until
+measured requirements justify them. The application-
 owned deterministic evaluation schema and local bounded worker are documented in
 `docs/EVALUATION_DESIGN.md`.
