@@ -72,6 +72,8 @@ def _read_text(path: Path) -> str | None:
 def validate_tracked_repository() -> list[str]:
     failures: list[str] = []
     for path in _tracked_files():
+        if not path.exists():
+            continue
         relative = path.relative_to(ROOT).as_posix()
         if path.name.startswith(".env") and path.name != ".env.example":
             failures.append(f"tracked environment file: {relative}")

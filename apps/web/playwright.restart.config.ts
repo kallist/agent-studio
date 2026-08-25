@@ -2,6 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./reliability-e2e",
+  testMatch: "restart-recovery.pw.ts",
   timeout: 20_000,
   retries: 1,
   reporter: [["line"], ["html", { open: "never" }]],
