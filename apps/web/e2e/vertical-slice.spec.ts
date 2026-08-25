@@ -117,7 +117,7 @@ test("navigates Studio, builds a calculator agent, and inspects its persisted tr
   await expect(metrics).toContainText("Duration");
   await expect(metrics).toContainText("Steps2");
   await expect(metrics).toContainText("Tool Calls1");
-  await expect(metrics).toContainText("Token UsageN/A");
+  await expect(metrics).toContainText("Total TokensN/A");
   await expect(page.getByRole("heading", { name: "User Input" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "LLM", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Tool Call" })).toBeVisible();
@@ -289,10 +289,25 @@ test("shows a real provider configuration error", async ({ page }) => {
   await page.locator(".builder-form").getByRole("textbox", { name: /^Name/ }).fill(`OpenAI Error State ${Date.now()}`);
   await page.getByRole("radio", { name: /OpenAI/ }).check();
   await page.getByLabel("Model").fill("provider-model-id");
+  await page.getByLabel("Enable Calculator").uncheck();
   await page.getByRole("button", { name: "Save agent" }).click();
   await page.getByLabel("Message").fill("Calculate 1 + 1");
   await page.getByRole("button", { name: "Run agent" }).click();
   await expect(page.locator(".error-banner")).toContainText("OpenAI provider is not configured");
+  await expect(page.getByText("Run could not start", { exact: true })).toBeVisible();
+});
+
+test("shows a DeepSeek provider configuration error and never falls back", async ({ page }) => {
+  await page.goto("/?view=builder");
+  await page.locator(".builder-form").getByRole("textbox", { name: /^Name/ }).fill(`DeepSeek Error State ${Date.now()}`);
+  await page.getByRole("radio", { name: /DeepSeek/ }).check();
+  await expect(page.getByText("DeepSeek key not configured", { exact: false })).toBeVisible();
+  await expect(page.getByLabel("Model")).toHaveValue("deepseek-v4-flash");
+  await page.getByLabel("Enable Calculator").uncheck();
+  await page.getByRole("button", { name: "Save agent" }).click();
+  await page.getByLabel("Message").fill("Calculate 1 + 1");
+  await page.getByRole("button", { name: "Run agent" }).click();
+  await expect(page.locator(".error-banner")).toContainText("DeepSeek provider is not configured");
   await expect(page.getByText("Run could not start", { exact: true })).toBeVisible();
 });
 

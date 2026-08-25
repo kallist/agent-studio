@@ -157,7 +157,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
                 onClick={() => { setSelectedId(base.id); setDocuments([]); setDocumentsLoading(true); setError(null); setResults([]); setSearched(false); }}
               >
                 <strong>{base.name}</strong>
-                <small>{base.document_count} documents · {base.embedding_model}</small>
+                <small>{base.document_count} documents · {base.embedding_provider}/{base.embedding_model} · {base.embedding_dimensions}d</small>
               </button>
             ))
           )}

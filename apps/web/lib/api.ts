@@ -1,4 +1,4 @@
-export type RuntimeMode = "mock" | "openai";
+export type RuntimeMode = "mock" | "openai" | "deepseek";
 export type RunStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type RunKind = "normal" | "evaluation";
 export type KnownEventType =
@@ -70,9 +70,34 @@ export interface AgentEvent {
 }
 
 export interface UsageMetrics {
+  requests: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
   total_tokens: number | null;
+  cached_tokens: number | null;
+  reasoning_tokens: number | null;
+}
+
+export interface ProviderReadiness {
+  provider: "openai" | "deepseek";
+  configured: boolean;
+  default_model: string | null;
+  api_style: "responses" | "chat_completions";
+  tracing_disabled: boolean;
+  selected: boolean;
+  capabilities: {
+    tool_calling: boolean;
+    structured_output: boolean;
+    reasoning_configuration: boolean;
+    streaming: boolean;
+    usage: boolean;
+    responses_only_fields: boolean;
+  };
+}
+
+export interface ProviderCatalogReadiness {
+  selected_provider: "openai" | "deepseek";
+  providers: ProviderReadiness[];
 }
 
 export interface ToolCallObservation {
@@ -93,6 +118,8 @@ export interface RunObservability {
   agent_id: string;
   runtime_type: string | null;
   provider_type: string | null;
+  api_style: string | null;
+  model: string | null;
   status: RunStatus;
   termination_reason: string | null;
   created_at: string;
@@ -293,6 +320,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string }>("/health"),
+  getProviderReadiness: () =>
+    request<ProviderCatalogReadiness>("/providers/readiness"),
   listAgents: () => request<AgentDefinition[]>("/agents"),
   createAgent: (payload: {
     name: string;
@@ -403,6 +432,7 @@ export interface KnowledgeBase {
   description: string;
   embedding_provider: string;
   embedding_model: string;
+  embedding_dimensions: number;
   created_at: string;
   document_count: number;
 }

@@ -22,10 +22,12 @@ from app.domain.contracts import (
     CancellationToken,
     EventSink,
     EventType,
+    ProviderDecision,
     RuntimeInput,
     TerminationReason,
     ToolResult,
     ToolResultStatus,
+    UsageMetrics,
 )
 from app.domain.errors import (
     InvalidAgentOutputError,
@@ -342,7 +344,14 @@ class AgentLoop:
                 raw_decision = await self._await_with_cancellation(
                     self._provider.decide(context), cancellation
                 )
-                decision = AgentDecision.model_validate(raw_decision)
+                provider_decision = (
+                    raw_decision if isinstance(raw_decision, ProviderDecision) else None
+                )
+                decision = AgentDecision.model_validate(
+                    provider_decision.decision
+                    if provider_decision is not None
+                    else raw_decision
+                )
                 if len(decision.model_dump_json()) > runtime_input.limits.max_decision_chars:
                     raise InvalidAgentOutputError(
                         "Provider decision exceeded its configured size limit."
@@ -379,16 +388,31 @@ class AgentLoop:
                     TerminationReason.PROVIDER_ERROR,
                     "Provider failed unexpectedly.",
                 )
+            completion_payload: dict[str, object] = {
+                "step": step_index,
+                "attempt": attempt,
+                "action": decision.action,
+                "duration_ms": round((loop.time() - decision_started) * 1000, 2),
+            }
+            if provider_decision is not None:
+                completion_payload.update(
+                    {
+                        "provider": provider_decision.provider,
+                        "model": provider_decision.model,
+                        "api_style": provider_decision.api_style.value,
+                        "stream_events": provider_decision.stream_event_count,
+                    }
+                )
+                if provider_decision.provider_request_id is not None:
+                    completion_payload["request_id"] = (
+                        provider_decision.provider_request_id
+                    )
             await self._emit(
                 emit,
                 runtime_input,
                 "llm.completed",
-                {
-                    "step": step_index,
-                    "attempt": attempt,
-                    "action": decision.action,
-                    "duration_ms": round((loop.time() - decision_started) * 1000, 2),
-                },
+                completion_payload,
+                usage=provider_decision.usage if provider_decision is not None else None,
             )
             return decision, (TerminationReason.COMPLETED, "")
         raise AssertionError("unreachable")
@@ -487,6 +511,8 @@ class AgentLoop:
         runtime_input: RuntimeInput,
         event_type: EventType,
         payload: dict[str, object],
+        *,
+        usage: UsageMetrics | None = None,
     ) -> None:
         step = payload.get("step_index", payload.get("step"))
         call_id = payload.get("tool_call_id", payload.get("call_id"))
@@ -503,6 +529,7 @@ class AgentLoop:
                     if isinstance(duration, (int, float)) and duration >= 0
                     else None
                 ),
+                usage=usage,
                 payload=payload,
             )
         )

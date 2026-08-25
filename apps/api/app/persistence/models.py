@@ -93,6 +93,7 @@ class KnowledgeBaseModel(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     embedding_provider: Mapped[str] = mapped_column(String(80), nullable=False)
     embedding_model: Mapped[str] = mapped_column(String(160), nullable=False)
+    embedding_dimensions: Mapped[int] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     documents: Mapped[list[DocumentModel]] = relationship(

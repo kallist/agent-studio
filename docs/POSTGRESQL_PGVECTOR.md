@@ -53,9 +53,9 @@ evolution remains future work.
 
 ## Embedding dimension and vector storage
 
-The dimension contract comes from the active `EmbeddingProvider`. The deterministic local provider
-uses 256 dimensions, so its PostgreSQL column is `vector(256)`. The configured OpenAI adapter
-currently declares 1536 dimensions. `PgVectorStore` accepts dimensions from 1 through 2000, matching
+The dimension contract comes from the active `EmbeddingProvider`. Both the deterministic local
+provider and the OpenAI adapter use 256 dimensions, so the PostgreSQL column is `vector(256)`.
+OpenAI requests native `dimensions=256`; it does not slice a larger vector. `PgVectorStore` accepts dimensions from 1 through 2000, matching
 the HNSW `vector` index limit, and validates every write and query before SQL execution.
 
 A mismatch or non-finite value produces a clear application error. During ingestion it becomes a
@@ -172,6 +172,7 @@ semantic/hybrid RAG, metadata filters/citations, HNSW presence, completed-only g
 locks, concurrent Memory dedupe, Evaluation, Observability, redaction, SQLite compatibility, and full
 browser E2E on both database backends.
 
-Still not tested: Real OpenAI/online embeddings, distributed workers, production TLS, managed
+Still not tested by default: Real OpenAI/online embeddings (an explicit opt-in integration test is
+provided), distributed workers, production TLS, managed
 PostgreSQL, backup/restore, cloud IAM/database roles, multi-tenancy/RBAC, and production load. The
 test superuser and disposable credentials are not a production role design.

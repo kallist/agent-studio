@@ -74,7 +74,19 @@ Port for executing or resuming an agent run. Its inputs and emitted events are a
 
 ### LLMProvider
 
-Port for model/provider selection, credentials, capabilities, and model invocation needed by a runtime adapter. `OpenAIProvider` creates the real OpenAI-backed implementation. `MockProvider` returns deterministic scripted outputs and tool requests without a network or API key.
+Port for model/provider selection, credentials, capabilities, and model invocation needed by a
+runtime adapter. `OpenAIProvider` resolves the Responses model path, while `DeepSeekProvider`
+resolves the OpenAI-compatible Chat Completions path through the same `AgentsSdkRuntime`.
+`MockProvider` returns deterministic scripted outputs and tool requests without a network or API
+key. Provider-specific clients, model shapes, capabilities, and settings stop at this resolver
+boundary.
+
+The OpenAI path uses a true streamed Responses request for each outer-loop step. The DeepSeek path
+uses a streamed Chat Completions request with its own server-only key and official base URL. SDK
+function callbacks only capture model-selected calls; `ToolExecutor` remains the sole business
+execution boundary. Provider, API style, model, and aggregate usage are normalized into application
+events, while raw SDK events, response objects, hosted sessions, and `previous_response_id` are not
+persisted.
 
 ### ToolRegistry
 

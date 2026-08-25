@@ -78,7 +78,26 @@ async def postgres_app(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[FastAPI]:
     await _reset_test_schema(postgres_database_url)
-    monkeypatch.setattr(settings, "openai_api_key", None)
+    real_openai_enabled = os.getenv("RUN_REAL_OPENAI_TESTS") == "1"
+    real_deepseek_enabled = os.getenv("RUN_REAL_DEEPSEEK_TESTS") == "1"
+    monkeypatch.setattr(
+        settings,
+        "openai_api_key",
+        os.getenv("OPENAI_API_KEY") if real_openai_enabled else None,
+    )
+    if real_openai_enabled:
+        monkeypatch.setattr(settings, "openai_max_output_tokens", 128)
+        monkeypatch.setattr(settings, "openai_max_retries", 1)
+        monkeypatch.setattr(settings, "openai_request_timeout_seconds", 30)
+    monkeypatch.setattr(
+        settings,
+        "deepseek_api_key",
+        os.getenv("DEEPSEEK_API_KEY") if real_deepseek_enabled else None,
+    )
+    if real_deepseek_enabled:
+        monkeypatch.setattr(settings, "deepseek_max_output_tokens", 128)
+        monkeypatch.setattr(settings, "deepseek_max_retries", 1)
+        monkeypatch.setattr(settings, "deepseek_request_timeout_seconds", 30)
     monkeypatch.setattr(settings, "embedding_provider", "local")
     app = create_app(
         postgres_database_url,

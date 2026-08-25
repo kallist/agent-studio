@@ -130,7 +130,12 @@ class AgentService:
         await self._repositories.validate_agent_run_kind(agent_id, run_kind)
         runtime = self._runtimes[agent.runtime_mode]
         if not runtime.is_configured:
-            raise ProviderNotConfiguredError("OpenAI provider is not configured.")
+            message = getattr(
+                runtime,
+                "not_configured_message",
+                f"{agent.runtime_mode.value.title()} provider is not configured.",
+            )
+            raise ProviderNotConfiguredError(message)
         run = await self._repositories.create_run(
             agent_id, request.input, run_kind=run_kind
         )
@@ -200,16 +205,26 @@ class AgentService:
             await self._broker.publish(normalized)
 
         await self._repositories.update_run(run.id, RunStatus.RUNNING)
+        runtime_name = getattr(runtime, "runtime_name", agent.runtime_mode.value)
+        provider_name = getattr(runtime, "provider_name", agent.runtime_mode.value)
+        api_style = getattr(runtime, "api_style", None)
+        attempted_model = agent.model or getattr(runtime, "default_model", None)
+        started_payload: dict[str, object] = {
+            "agent_id": str(agent.id),
+            "runtime": runtime_name,
+            "provider": provider_name,
+            "api_style": (
+                api_style.value if api_style is not None else agent.runtime_mode.value
+            ),
+        }
+        if attempted_model is not None:
+            started_payload["model"] = attempted_model
         await emit(
             AgentEvent(
                 run_id=run.id,
                 sequence=0,
                 type="run.started",
-                payload={
-                    "agent_id": str(agent.id),
-                    "runtime": agent.runtime_mode.value,
-                    "provider": agent.runtime_mode.value,
-                },
+                payload=started_payload,
             )
         )
         try:

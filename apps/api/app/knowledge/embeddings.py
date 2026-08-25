@@ -4,7 +4,19 @@ import hashlib
 import math
 import re
 
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    AsyncOpenAI,
+    AuthenticationError,
+    RateLimitError,
+)
+
+from app.domain.errors import KnowledgeProviderError
+
+_OPENAI_EMBEDDING_DIMENSIONS = 256
+_OPENAI_EMBEDDING_BATCH_SIZE = 128
 
 
 class DeterministicEmbeddingProvider:
@@ -28,12 +40,27 @@ class DeterministicEmbeddingProvider:
     async def embed(self, texts: list[str]) -> list[list[float]]:
         return [_embed_text(text, self._dimensions) for text in texts]
 
+    async def close(self) -> None:
+        return None
+
 
 class OpenAIEmbeddingProvider:
-    def __init__(self, api_key: str, model: str, dimensions: int = 1536) -> None:
-        self._client = AsyncOpenAI(api_key=api_key)
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        *,
+        timeout_seconds: float = 20.0,
+        max_retries: int = 2,
+        client: AsyncOpenAI | None = None,
+    ) -> None:
+        self._client = client or AsyncOpenAI(
+            api_key=api_key,
+            timeout=timeout_seconds,
+            max_retries=max_retries,
+        )
         self._model = model
-        self._dimensions = dimensions
+        self._dimensions = _OPENAI_EMBEDDING_DIMENSIONS
 
     @property
     def name(self) -> str:
@@ -50,8 +77,45 @@ class OpenAIEmbeddingProvider:
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        response = await self._client.embeddings.create(model=self._model, input=texts)
-        return [list(item.embedding) for item in sorted(response.data, key=lambda item: item.index)]
+        vectors: list[list[float]] = []
+        try:
+            for start in range(0, len(texts), _OPENAI_EMBEDDING_BATCH_SIZE):
+                batch = texts[start : start + _OPENAI_EMBEDDING_BATCH_SIZE]
+                response = await self._client.embeddings.create(
+                    model=self._model,
+                    input=batch,
+                    dimensions=self._dimensions,
+                )
+                ordered = sorted(response.data, key=lambda item: item.index)
+                if len(ordered) != len(batch) or [item.index for item in ordered] != list(
+                    range(len(batch))
+                ):
+                    raise KnowledgeProviderError(
+                        "OpenAI embeddings returned an invalid batch index contract."
+                    )
+                for item in ordered:
+                    vector = list(item.embedding)
+                    if len(vector) != self._dimensions or not all(
+                        math.isfinite(value) for value in vector
+                    ):
+                        raise KnowledgeProviderError(
+                            "OpenAI embeddings returned an invalid vector contract."
+                        )
+                    vectors.append(vector)
+        except AuthenticationError:
+            raise KnowledgeProviderError("OpenAI embeddings authentication failed.") from None
+        except RateLimitError:
+            raise KnowledgeProviderError("OpenAI embeddings were rate limited.") from None
+        except (APITimeoutError, APIConnectionError):
+            raise KnowledgeProviderError(
+                "OpenAI embeddings are temporarily unavailable."
+            ) from None
+        except APIError:
+            raise KnowledgeProviderError("OpenAI embeddings request failed.") from None
+        return vectors
+
+    async def close(self) -> None:
+        await self._client.close()
 
 
 def _features(text: str) -> list[str]:

@@ -61,9 +61,12 @@ def _duration(started_at: datetime | None, completed_at: datetime | None) -> flo
 
 def _usage(events: list[AgentEvent]) -> UsageMetrics:
     values: dict[str, list[int]] = {
+        "requests": [],
         "input_tokens": [],
         "output_tokens": [],
         "total_tokens": [],
+        "cached_tokens": [],
+        "reasoning_tokens": [],
     }
     for event in events:
         if event.usage is None:
@@ -73,9 +76,14 @@ def _usage(events: list[AgentEvent]) -> UsageMetrics:
             if value is not None:
                 values[name].append(value)
     return UsageMetrics(
+        requests=sum(values["requests"]) if values["requests"] else None,
         input_tokens=sum(values["input_tokens"]) if values["input_tokens"] else None,
         output_tokens=sum(values["output_tokens"]) if values["output_tokens"] else None,
         total_tokens=sum(values["total_tokens"]) if values["total_tokens"] else None,
+        cached_tokens=sum(values["cached_tokens"]) if values["cached_tokens"] else None,
+        reasoning_tokens=(
+            sum(values["reasoning_tokens"]) if values["reasoning_tokens"] else None
+        ),
     )
 
 
@@ -150,7 +158,27 @@ def aggregate_run(run: RunResult, events: list[AgentEvent]) -> RunObservability:
         else max(observed_steps, default=0)
     )
     runtime = started.payload.get("runtime") if started is not None else None
-    provider = started.payload.get("provider") if started is not None else None
+    llm_completed = next(
+        (event for event in reversed(ordered) if event.type == "llm.completed"), None
+    )
+    llm_provider = llm_completed.payload.get("provider") if llm_completed else None
+    provider = (
+        llm_provider
+        if isinstance(llm_provider, str)
+        else (started.payload.get("provider") if started is not None else None)
+    )
+    llm_api_style = llm_completed.payload.get("api_style") if llm_completed else None
+    api_style = (
+        llm_api_style
+        if isinstance(llm_api_style, str)
+        else (started.payload.get("api_style") if started is not None else None)
+    )
+    llm_model = llm_completed.payload.get("model") if llm_completed else None
+    model = (
+        llm_model
+        if isinstance(llm_model, str)
+        else (started.payload.get("model") if started is not None else None)
+    )
     termination_reason = (
         terminal.payload.get("termination_reason") if terminal is not None else None
     )
@@ -169,6 +197,8 @@ def aggregate_run(run: RunResult, events: list[AgentEvent]) -> RunObservability:
         agent_id=run.agent_id,
         runtime_type=runtime if isinstance(runtime, str) else None,
         provider_type=provider if isinstance(provider, str) else None,
+        api_style=api_style if isinstance(api_style, str) else None,
+        model=model if isinstance(model, str) else None,
         status=run.status,
         termination_reason=termination_reason if isinstance(termination_reason, str) else None,
         created_at=run.created_at,

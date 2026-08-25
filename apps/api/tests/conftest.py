@@ -14,6 +14,8 @@ from app.persistence.database import settings
 async def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
     database_path = (tmp_path / "test.db").as_posix()
     monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setattr(settings, "deepseek_api_key", None)
+    monkeypatch.setattr(settings, "llm_provider", "openai")
     app = create_app(
         f"sqlite+aiosqlite:///{database_path}",
         knowledge_storage_path=str(tmp_path / "knowledge"),

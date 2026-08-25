@@ -115,7 +115,9 @@ and UI filtering. No latency assertion depends on sleeping or a minimum wall-clo
 
 ## Current limitations
 
-- Real OpenAI network usage translation is not validated in the default no-key test path.
+- Real OpenAI network usage translation is not validated in the default no-key test path. The
+  explicit `real_openai` suite verifies request count, token aggregation, model, stream consumption,
+  and tool-call correlation when locally opted in.
 - Live PostgreSQL/pgvector Observability is validated through persisted Calculator, RAG, Memory,
   and Evaluation workflows, including tool correlation, durations, Dashboard isolation, and
   redaction before persistence. Production-scale analytics performance remains untested.

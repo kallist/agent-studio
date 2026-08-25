@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.domain.contracts import AgentRun, CancellationToken, EventSink, RuntimeInput
+from app.domain.contracts import (
+    AgentRun,
+    CancellationToken,
+    EventSink,
+    ModelApiStyle,
+    RuntimeInput,
+)
 from app.runtime.engine import AgentLoop
 from app.runtime.providers import MockProvider
 from app.tools.knowledge_search import bind_knowledge_bases
@@ -14,6 +20,26 @@ class MockRuntime:
         self._loop = AgentLoop(
             MockProvider(blocking_input=blocking_input), tools, runtime_name="mock"
         )
+
+    @property
+    def runtime_name(self) -> str:
+        return "mock"
+
+    @property
+    def provider_name(self) -> str:
+        return "mock"
+
+    @property
+    def default_model(self) -> None:
+        return None
+
+    @property
+    def api_style(self) -> ModelApiStyle:
+        return ModelApiStyle.DETERMINISTIC
+
+    @property
+    def not_configured_message(self) -> str:
+        return "Mock provider is not configured."
 
     @property
     def is_configured(self) -> bool:

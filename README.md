@@ -4,10 +4,11 @@ Agent Studio is a development workbench for defining agents, running them throug
 
 The first runnable vertical slice now supports:
 
-- persistent agent definitions with Mock/Demo or opt-in OpenAI runtime mode;
+- persistent agent definitions with Mock/Demo, OpenAI, or DeepSeek runtime modes;
 - a safe Calculator tool (`+`, `-`, `*`, `/`, unary signs, and parentheses);
 - deterministic no-key runs through `MockRuntime`;
-- an OpenAI Agents SDK adapter behind the application-owned `AgentRuntime` port;
+- one Agents SDK adapter behind the application-owned `AgentRuntime` port, resolving OpenAI
+  Responses and DeepSeek OpenAI-compatible Chat Completions models;
 - FastAPI endpoints plus same-origin SSE streaming;
 - a responsive Next.js playground and ordered trace timeline;
 - knowledge bases with secure txt/Markdown/PDF ingestion, asynchronous job states, chunking, embeddings, vector search, and inspectable citations;
@@ -72,7 +73,20 @@ No API key is needed:
 4. Confirm the final answer is `5192` and the trace shows run start, runtime activity, tool selection, tool input, tool result, and final answer.
 5. Refresh; the selected run and trace remain available through the URL.
 
-OpenAI mode is opt-in. Without `OPENAI_API_KEY`, the app still starts and returns the explicit error `OpenAI provider is not configured.` It never falls back silently to Mock mode.
+OpenAI and DeepSeek are separate opt-in providers. Without the selected provider's server-side key,
+the app still starts and returns `OpenAI provider is not configured.` or
+`DeepSeek provider is not configured.` It never falls back to Mock or another real provider.
+
+The real adapter uses `openai-agents==0.20.0` and `openai==2.54.0`, resolving OpenAI through the
+Responses API and DeepSeek through OpenAI-compatible Chat Completions. It consumes each SDK stream
+to a terminal event, translates aggregate request/token usage into
+application events, and uses capture-only SDK function tools so the application `ToolExecutor`
+still owns validation, permissions, timeouts, execution, and audit events. No model is silently
+crossed between providers: an Agent model overrides its selected provider's configured default
+(`OPENAI_MODEL` or `DEEPSEEK_MODEL`). See
+[OpenAI integration](docs/OPENAI_INTEGRATION.md) for opt-in validation commands and limits.
+See [Model providers](docs/MODEL_PROVIDERS.md) for provider identity, capability differences,
+DeepSeek configuration, and explicit online validation gates.
 
 ## Quality commands
 
@@ -122,8 +136,8 @@ LLM-as-a-Judge, multi-agent orchestration, and distributed evaluation workers re
 ## Security
 
 Agent Studio's default security model is a single-user local development workbench. The documented
-commands bind to `127.0.0.1`; CORS/Host defaults are local and OpenAI is opt-in with no silent Mock
-fallback. RAG documents, Memory, user prompts, tool/provider output, and Evaluation values are
+commands bind to `127.0.0.1`; CORS/Host defaults are local and real providers are opt-in with no
+silent provider fallback. RAG documents, Memory, user prompts, tool/provider output, and Evaluation values are
 untrusted data. They do not gain system-instruction or tool-permission authority by entering a
 runtime context.
 
