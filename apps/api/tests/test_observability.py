@@ -4,18 +4,128 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.domain.contracts import AgentCreate, AgentEvent, RunStatus
+from app.domain.contracts import AgentCreate, AgentEvent, RunResult, RunStatus, UsageMetrics
 from app.main import create_app
+from app.observability.aggregation import aggregate_run
 from app.observability.redaction import REDACTED, redact_text, redact_value
 from app.persistence.database import settings
 from app.persistence.models import RunEventModel, RunModel
 from app.runtime.providers import MockProvider
+
+
+def test_usage_aggregates_every_completed_provider_request() -> None:
+    run_id = uuid4()
+    agent_id = uuid4()
+    now = datetime.now(UTC)
+    run = RunResult(
+        id=run_id,
+        agent_id=agent_id,
+        status=RunStatus.COMPLETED,
+        input="calculate",
+        output="5192",
+        created_at=now,
+        updated_at=now,
+    )
+    events = [
+        AgentEvent(
+            run_id=run_id,
+            sequence=1,
+            type="llm.completed",
+            usage=UsageMetrics(
+                requests=1,
+                input_tokens=10,
+                output_tokens=2,
+                total_tokens=12,
+                cached_tokens=3,
+                reasoning_tokens=1,
+            ),
+            payload={
+                "provider": "openai",
+                "api_style": "responses",
+                "model": "test-model",
+            },
+        ),
+        AgentEvent(
+            run_id=run_id,
+            sequence=2,
+            type="llm.completed",
+            usage=UsageMetrics(
+                requests=1,
+                input_tokens=20,
+                output_tokens=4,
+                total_tokens=24,
+            ),
+            payload={
+                "provider": "openai",
+                "api_style": "responses",
+                "model": "test-model",
+            },
+        ),
+    ]
+
+    metrics = aggregate_run(run, events)
+
+    assert metrics.provider_type == "openai"
+    assert metrics.api_style == "responses"
+    assert metrics.model == "test-model"
+    assert metrics.usage == UsageMetrics(
+        requests=2,
+        input_tokens=30,
+        output_tokens=6,
+        total_tokens=36,
+        cached_tokens=3,
+        reasoning_tokens=1,
+    )
+
+
+def test_failed_provider_run_keeps_attempted_model_without_llm_completion() -> None:
+    run_id = uuid4()
+    agent_id = uuid4()
+    now = datetime.now(UTC)
+    run = RunResult(
+        id=run_id,
+        agent_id=agent_id,
+        status=RunStatus.FAILED,
+        input="hello",
+        error="Provider request failed.",
+        created_at=now,
+        updated_at=now,
+    )
+    events = [
+        AgentEvent(
+            run_id=run_id,
+            sequence=1,
+            type="run.started",
+            payload={
+                "runtime": "agents_sdk",
+                "provider": "deepseek",
+                "api_style": "chat_completions",
+                "model": "deepseek-v4-flash",
+            },
+        ),
+        AgentEvent(
+            run_id=run_id,
+            sequence=2,
+            type="run.failed",
+            payload={
+                "termination_reason": "provider_error",
+                "error_category": "provider_error",
+                "error": "Provider request failed.",
+            },
+        ),
+    ]
+
+    metrics = aggregate_run(run, events)
+
+    assert metrics.provider_type == "deepseek"
+    assert metrics.api_style == "chat_completions"
+    assert metrics.model == "deepseek-v4-flash"
 
 
 async def _create_agent(client: AsyncClient) -> dict[str, object]:
@@ -60,14 +170,18 @@ async def test_completed_calculator_observability_is_correlated_and_real(
     assert metrics["status"] == "completed"
     assert metrics["termination_reason"] == "completed"
     assert metrics["runtime_type"] == metrics["provider_type"] == "mock"
+    assert metrics["api_style"] == "deterministic"
     assert metrics["duration_ms"] >= 0
     assert metrics["step_count"] == 2
     assert metrics["event_count"] == len(events)
     assert metrics["tool_calls"] == {"total": 1, "succeeded": 1, "failed": 0}
     assert metrics["usage"] == {
+        "requests": None,
         "input_tokens": None,
         "output_tokens": None,
         "total_tokens": None,
+        "cached_tokens": None,
+        "reasoning_tokens": None,
     }
     assert metrics["started_at"] is not None
     assert metrics["terminal_at"] is not None

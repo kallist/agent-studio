@@ -34,7 +34,7 @@ from app.persistence.models import Base
 from app.persistence.repositories import Repositories
 from app.runtime.agents_sdk import AgentsSdkRuntime
 from app.runtime.mock import MockRuntime
-from app.runtime.providers import OpenAIProvider
+from app.runtime.providers import DeepSeekProvider, OpenAIProvider
 from app.tools.knowledge_search import KnowledgeSearchTool
 from app.tools.registry import ToolExecutor, default_tool_registry
 
@@ -75,7 +75,10 @@ def create_app(
         if not settings.openai_api_key:
             raise RuntimeError("EMBEDDING_PROVIDER=openai requires OPENAI_API_KEY.")
         embeddings = OpenAIEmbeddingProvider(
-            settings.openai_api_key, settings.openai_embedding_model
+            settings.openai_api_key,
+            settings.openai_embedding_model,
+            timeout_seconds=settings.openai_request_timeout_seconds,
+            max_retries=settings.openai_max_retries,
         )
     else:
         embeddings = DeterministicEmbeddingProvider()
@@ -103,10 +106,21 @@ def create_app(
     memory_store = SqlAlchemyMemoryStore(sessions)
     memory_policy = MemoryPolicy()
     memory_retriever = MemoryRetriever(memory_store, memory_policy)
-    provider = OpenAIProvider(
+    openai_provider = OpenAIProvider(
         api_key=settings.openai_api_key,
         default_model=settings.openai_model,
         tracing_disabled=settings.openai_agents_disable_tracing,
+        request_timeout_seconds=settings.openai_request_timeout_seconds,
+        max_retries=settings.openai_max_retries,
+        max_output_tokens=settings.openai_max_output_tokens,
+    )
+    deepseek_provider = DeepSeekProvider(
+        api_key=settings.deepseek_api_key,
+        default_model=settings.deepseek_model,
+        base_url=settings.deepseek_base_url,
+        request_timeout_seconds=settings.deepseek_request_timeout_seconds,
+        max_retries=settings.deepseek_max_retries,
+        max_output_tokens=settings.deepseek_max_output_tokens,
     )
     service = AgentService(
         repositories=repositories,
@@ -114,7 +128,8 @@ def create_app(
             RuntimeMode.MOCK: MockRuntime(
                 executor, blocking_input=settings.mock_provider_block_input
             ),
-            RuntimeMode.OPENAI: AgentsSdkRuntime(provider, executor),
+            RuntimeMode.OPENAI: AgentsSdkRuntime(openai_provider, executor),
+            RuntimeMode.DEEPSEEK: AgentsSdkRuntime(deepseek_provider, executor),
         },
         available_tools=registry.names,
         memory_store=memory_store,
@@ -149,6 +164,13 @@ def create_app(
             app.state.evaluation_service = evaluation_service
             app.state.evaluation_worker = evaluation_worker
             app.state.database_sessions = sessions
+            app.state.openai_provider = openai_provider
+            app.state.deepseek_provider = deepseek_provider
+            app.state.model_providers = {
+                openai_provider.name: openai_provider,
+                deepseek_provider.name: deepseek_provider,
+            }
+            app.state.selected_model_provider = settings.llm_provider
             await worker.start()
             worker_started = True
             await evaluation_worker.start()
@@ -159,6 +181,7 @@ def create_app(
                 await evaluation_worker.stop()
             if worker_started:
                 await worker.stop()
+            await embeddings.close()
             await engine.dispose()
 
     app = FastAPI(title="Agent Studio API", version="0.1.0", lifespan=lifespan)
@@ -205,6 +228,20 @@ def _apply_lightweight_schema_migrations(connection: Connection) -> None:
         )
         connection.execute(
             text("CREATE INDEX IF NOT EXISTS ix_runs_run_kind ON runs (run_kind)")
+        )
+
+    knowledge_base_columns = {
+        column["name"] for column in inspector.get_columns("knowledge_bases")
+    }
+    if "embedding_dimensions" not in knowledge_base_columns:
+        connection.execute(
+            text("ALTER TABLE knowledge_bases ADD COLUMN embedding_dimensions INTEGER")
+        )
+        connection.execute(
+            text(
+                "UPDATE knowledge_bases SET embedding_dimensions = "
+                "CASE WHEN embedding_provider = 'openai' THEN 1536 ELSE 256 END"
+            )
         )
 
     chunk_columns = {column["name"] for column in inspector.get_columns("chunks")}

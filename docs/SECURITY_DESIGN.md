@@ -188,7 +188,7 @@ sensitive values.
 | --- | --- |
 | Run prompt | 20,000 characters |
 | Agent instructions | 8,000 characters |
-| AgentLoop | 8 steps, 30 seconds, 3 calls/tool by default |
+| AgentLoop | 3 steps, 30 seconds, 3 calls/tool by default |
 | Runtime context / decision | 32,000 / 8,000 characters by default |
 | Tool input | 16,000 UTF-8 bytes by default |
 | Calculator expression | 200 characters |
@@ -237,6 +237,12 @@ errors. Playwright covers real XSS/Memory rendering, RAG injection/provenance, i
 grader rejection, and the existing Calculator/RAG/Memory/observability/evaluation/mobile flows.
 
 Real OpenAI behavior: **NOT TESTED** by the default suite.
+
+The Agents SDK is pinned and receives `tracing_disabled=true` by default plus
+`trace_include_sensitive_data=false` explicitly. Provider keys are passed only to SDK clients and
+never enter instructions, input, persisted events, API responses, or UI state. The adapter sets
+`store=false`, uses no hosted session and no `previous_response_id`, and applies bounded output,
+timeout, and retry settings.
 
 Live PostgreSQL/pgvector behavior is tested with bound injection-shaped filters, fixed-dimension
 vector writes, completed-only retrieval, redaction before Run/RunEvent/Evaluation persistence, a

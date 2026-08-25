@@ -57,6 +57,7 @@ class KnowledgeRepository:
         request: KnowledgeBaseCreate,
         embedding_provider: str,
         embedding_model: str,
+        embedding_dimensions: int = 256,
     ) -> KnowledgeBaseView:
         async with self._sessions() as session:
             model = KnowledgeBaseModel(
@@ -64,6 +65,7 @@ class KnowledgeRepository:
                 description=request.description.strip(),
                 embedding_provider=embedding_provider,
                 embedding_model=embedding_model,
+                embedding_dimensions=embedding_dimensions,
             )
             session.add(model)
             await session.commit()
@@ -95,6 +97,26 @@ class KnowledgeRepository:
             if row is None:
                 raise EntityNotFoundError(f"Knowledge base '{knowledge_base_id}' was not found.")
             return _base_view(row[0], row[1])
+
+    async def active_embedding_contracts(
+        self, knowledge_base_id: UUID
+    ) -> set[tuple[str, str, int]]:
+        statement = (
+            select(
+                EmbeddingModel.provider,
+                EmbeddingModel.model,
+                EmbeddingModel.dimensions,
+            )
+            .distinct()
+            .join(ChunkModel, ChunkModel.id == EmbeddingModel.chunk_id)
+            .join(IngestionJobModel, IngestionJobModel.id == ChunkModel.ingestion_job_id)
+            .where(ChunkModel.knowledge_base_id == str(knowledge_base_id))
+            .where(IngestionJobModel.state == IngestionState.COMPLETED.value)
+            .where(IngestionJobModel.document_id == ChunkModel.document_id)
+        )
+        async with self._sessions() as session:
+            rows = (await session.execute(statement)).all()
+        return {(provider, model, dimensions) for provider, model, dimensions in rows}
 
     async def create_document_and_job(
         self,
@@ -297,7 +319,13 @@ class KnowledgeRepository:
                 for model in models
             ]
 
-    async def activate_job(self, job_id: UUID) -> None:
+    async def activate_job(
+        self,
+        job_id: UUID,
+        embedding_provider: str | None = None,
+        embedding_model: str | None = None,
+        embedding_dimensions: int | None = None,
+    ) -> None:
         async with self._sessions() as session:
             job = await session.get(IngestionJobModel, str(job_id))
             if job is None:
@@ -331,6 +359,28 @@ class KnowledgeRepository:
                 .where(ChunkModel.ingestion_job_id == str(job_id))
                 .values(chunk_index=(-ChunkModel.chunk_index) - 1)
             )
+            metadata = (embedding_provider, embedding_model, embedding_dimensions)
+            if any(value is not None for value in metadata):
+                if not all(value is not None for value in metadata):
+                    raise ValueError("Embedding activation metadata must be complete.")
+                assert embedding_provider is not None
+                assert embedding_model is not None
+                assert embedding_dimensions is not None
+                document = await session.get(DocumentModel, job.document_id)
+                if document is None:
+                    raise EntityNotFoundError(
+                        f"Document for ingestion job '{job_id}' was not found."
+                    )
+                knowledge_base = await session.get(
+                    KnowledgeBaseModel, document.knowledge_base_id
+                )
+                if knowledge_base is None:
+                    raise EntityNotFoundError(
+                        f"Knowledge base for ingestion job '{job_id}' was not found."
+                    )
+                knowledge_base.embedding_provider = embedding_provider
+                knowledge_base.embedding_model = embedding_model
+                knowledge_base.embedding_dimensions = embedding_dimensions
             job.state = IngestionState.COMPLETED.value
             job.error = None
             job.completed_at = datetime.now(UTC)
@@ -428,6 +478,7 @@ def _base_view(model: KnowledgeBaseModel, document_count: int) -> KnowledgeBaseV
         description=model.description,
         embedding_provider=model.embedding_provider,
         embedding_model=model.embedding_model,
+        embedding_dimensions=model.embedding_dimensions,
         created_at=_aware(model.created_at),
         document_count=document_count,
     )

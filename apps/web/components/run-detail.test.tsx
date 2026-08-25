@@ -26,6 +26,8 @@ function metrics(status: RunResult["status"] = "completed"): RunObservability {
     agent_id: "22222222-2222-2222-2222-222222222222",
     runtime_type: "mock",
     provider_type: "mock",
+    api_style: "deterministic",
+    model: null,
     status,
     termination_reason: status,
     created_at: timestamp,
@@ -35,7 +37,7 @@ function metrics(status: RunResult["status"] = "completed"): RunObservability {
     event_count: 4,
     step_count: 2,
     tool_calls: { total: 1, succeeded: status === "completed" ? 1 : 0, failed: status === "failed" ? 1 : 0 },
-    usage: { input_tokens: null, output_tokens: null, total_tokens: null },
+    usage: { requests: null, input_tokens: null, output_tokens: null, total_tokens: null, cached_tokens: null, reasoning_tokens: null },
     error_category: status === "failed" ? "tool_error" : status === "cancelled" ? "cancelled" : null,
     error_summary: status === "failed" ? "Division by zero is not allowed." : status === "cancelled" ? "Agent run was cancelled by the user." : null,
     event_statistics: {},
@@ -68,10 +70,11 @@ describe("RunDetail observability", () => {
     expect(view.container.querySelector("img")).toBeNull();
   });
 
-  it("renders real summary metrics, token N/A, correlation, and filters", () => {
+  it("renders real summary metrics, provider usage N/A, correlation, and filters", () => {
     render(<RunDetail run={run()} events={events} observability={metrics()} agent={null} onBack={vi.fn()} onRerun={vi.fn()} />);
     expect(screen.getByLabelText("Observability metrics")).toHaveTextContent("125 ms");
-    expect(screen.getByLabelText("Observability metrics")).toHaveTextContent("Token UsageN/A");
+    expect(screen.getByLabelText("Observability metrics")).toHaveTextContent("Provider RequestsN/A");
+    expect(screen.getByLabelText("Observability metrics")).toHaveTextContent("Total TokensN/A");
     expect(screen.getByLabelText("Observability metrics")).toHaveTextContent("Tool Calls1");
     expect(screen.getAllByText("33333333-3333-3333-3333-333333333333")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Tools" }));

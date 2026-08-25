@@ -178,11 +178,35 @@ async def test_run_api_does_not_directly_serialize_internal_instructions(
 
 
 @pytest.mark.asyncio
-async def test_openai_provider_is_explicitly_unavailable_without_key(client: AsyncClient) -> None:
+async def test_model_providers_are_distinct_and_explicitly_unavailable_without_keys(
+    client: AsyncClient,
+) -> None:
+    readiness = await client.get("/providers/readiness")
+    assert readiness.status_code == 200
+    catalog = readiness.json()
+    assert catalog["selected_provider"] == "openai"
+    identities = [
+        (item["provider"], item["configured"], item["api_style"])
+        for item in catalog["providers"]
+    ]
+    assert identities == [
+        ("openai", False, "responses"),
+        ("deepseek", False, "chat_completions"),
+    ]
+    assert catalog["providers"][1]["default_model"] == "deepseek-v4-flash"
+    assert catalog["providers"][0]["capabilities"]["responses_only_fields"] is True
+    assert catalog["providers"][1]["capabilities"]["responses_only_fields"] is False
+    assert "key" not in readiness.text.casefold()
+
     created = await create_agent(client, runtime_mode="openai")
     response = await client.post(f"/agents/{created['id']}/runs", json={"input": "1+1"})
     assert response.status_code == 503
     assert response.json()["detail"] == "OpenAI provider is not configured."
+
+    created = await create_agent(client, runtime_mode="deepseek")
+    response = await client.post(f"/agents/{created['id']}/runs", json={"input": "1+1"})
+    assert response.status_code == 503
+    assert response.json()["detail"] == "DeepSeek provider is not configured."
 
 
 @pytest.mark.asyncio

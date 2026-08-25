@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
@@ -16,8 +18,18 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite+aiosqlite:///./agent_studio.db"
     openai_api_key: str | None = None
-    openai_model: str = "gpt-5.6-terra"
+    openai_model: str | None = None
     openai_agents_disable_tracing: bool = True
+    openai_request_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    openai_max_retries: int = Field(default=2, ge=0, le=5)
+    openai_max_output_tokens: int = Field(default=512, ge=64, le=4_096)
+    llm_provider: str = "openai"
+    deepseek_api_key: str | None = None
+    deepseek_model: str | None = "deepseek-v4-flash"
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_request_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    deepseek_max_retries: int = Field(default=2, ge=0, le=5)
+    deepseek_max_output_tokens: int = Field(default=512, ge=64, le=4_096)
     mock_provider_block_input: str | None = Field(default=None, max_length=200)
     cors_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
     allowed_hosts: str = "127.0.0.1,localhost,test,testserver"
@@ -30,6 +42,56 @@ class Settings(BaseSettings):
     evaluation_worker_count: int = Field(default=1, ge=1, le=8)
     embedding_provider: str = "local"
     openai_embedding_model: str = "text-embedding-3-small"
+
+    @field_validator(
+        "openai_api_key",
+        "openai_model",
+        "deepseek_api_key",
+        "deepseek_model",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_provider_settings(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+    @field_validator("llm_provider")
+    @classmethod
+    def validate_llm_provider(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if normalized not in {"openai", "deepseek"}:
+            raise ValueError("LLM_PROVIDER must be 'openai' or 'deepseek'.")
+        return normalized
+
+    @field_validator("deepseek_base_url")
+    @classmethod
+    def validate_deepseek_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "api.deepseek.com"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port is not None
+            or parsed.path not in {"", "/v1"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "DEEPSEEK_BASE_URL must use the official https://api.deepseek.com origin."
+            )
+        return normalized
+
+    @field_validator("embedding_provider")
+    @classmethod
+    def validate_embedding_provider(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if normalized not in {"local", "openai"}:
+            raise ValueError("EMBEDDING_PROVIDER must be 'local' or 'openai'.")
+        return normalized
 
     @field_validator("cors_origins", "allowed_hosts")
     @classmethod

@@ -219,7 +219,9 @@ browser workflows with MockRuntime.
   ERROR; any referenced non-terminal Agent Run receives a persisted restart failure event.
 - Hidden evaluation Agent clones are retained for lineage and currently have no retention policy.
 - There is no baseline-comparison UI in v1.
-- Real OpenAI evaluation is NOT TESTED.
+- Real OpenAI evaluation uses the same evaluation-owned Agent clone and real `Run` path. It is
+  excluded from the default suite and remains NOT TESTED unless the explicit online validation
+  environment is enabled.
 - PostgreSQL 17/pgvector Evaluation persistence and execution are tested with Suite/Case CRUD,
   Calculator PASS, intentional business FAIL, idempotent start, isolated Evaluation Memory,
   Dashboard isolation, real Run/RunEvent linkage, persisted aggregates, and rollback of all

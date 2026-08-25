@@ -38,5 +38,9 @@ class KnowledgeValidationError(AgentStudioError):
     """Raised when knowledge input or uploaded content is unsafe or unsupported."""
 
 
+class KnowledgeProviderError(AgentStudioError):
+    """Raised when an embedding provider fails without exposing provider details."""
+
+
 class DocumentParsingError(AgentStudioError):
     """Raised when a document cannot be converted into searchable text."""

@@ -11,11 +11,11 @@ The default path is fully runnable without an API key:
 - `DeterministicEmbeddingProvider` supports tests, demos, and the miniature benchmark.
 - PostgreSQL URLs select `PgVectorStore`, which enables `pgvector` and performs cosine ranking in SQL.
 
-OpenAI embeddings are opt-in through `EMBEDDING_PROVIDER=openai` and `OPENAI_API_KEY`. The provider uses the configured `OPENAI_EMBEDDING_MODEL`; the default is `text-embedding-3-small`.
+OpenAI embeddings are opt-in through `EMBEDDING_PROVIDER=openai` and `OPENAI_API_KEY`. The provider uses the configured `OPENAI_EMBEDDING_MODEL`; the default is `text-embedding-3-small`. It requests the API's native `dimensions=256` contract and never truncates or slices a larger vector.
 
 ## Data model
 
-`KnowledgeBase` records the active embedding provider/model so incompatible query vectors are never silently compared. `Document` stores the safe display filename, source URI, verified MIME type, byte size, and an opaque generated storage path. `Chunk` owns ordered text plus parser/chunk metadata and is tied to the `IngestionJob` generation that produced it. `Embedding` owns provider/model/dimensions metadata and the portable fallback vector. `IngestionJob` records `queued`, `processing`, `completed`, or `failed`, with timestamps and a bounded user-safe error.
+`KnowledgeBase` records the active embedding provider/model/dimensions so incompatible query vectors are never silently compared. `Document` stores the safe display filename, source URI, verified MIME type, byte size, and an opaque generated storage path. `Chunk` owns ordered text plus parser/chunk metadata and is tied to the `IngestionJob` generation that produced it. `Embedding` owns provider/model/dimensions metadata and the portable fallback vector. `IngestionJob` records `queued`, `processing`, `completed`, or `failed`, with timestamps and a bounded user-safe error.
 
 Agents persist attached knowledge-base IDs and enable the stable tool name `knowledge_search`. The runtime adds those IDs server-side; a model cannot choose arbitrary collections by supplying hidden tool arguments.
 
@@ -165,5 +165,7 @@ This is a regression benchmark, not a statistically meaningful retrieval evaluat
 - The pre-Alembic startup migration bridges the agent attachment column and adds/backfills `chunks.ingestion_job_id`. Legacy chunks are exposed only when the newest known job completed; ambiguous failed/processing replacements remain hidden. Establish Alembic before further production schema evolution.
 - There is no OCR, table-aware PDF parsing, deduplication, public document deletion/re-ingestion endpoint, or tenant authorization yet. The generation model and tests cover replacement consistency before that endpoint is introduced.
 - Hybrid lexical scoring is simple overlap rather than BM25 and uses fixed weights.
-- OpenAI embedding batching has no retry/rate-limit policy yet; a production queue should add bounded retries and dead-letter handling.
+- OpenAI embedding calls use bounded SDK retries/timeouts, batches of at most 128 inputs, stable
+  response-index ordering, and strict finite 256-dimensional validation. A production queue still
+  needs durable retry scheduling and dead-letter handling.
 - Knowledge-base attachment is stored on an agent definition but not versioned separately in this first slice.

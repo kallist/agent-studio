@@ -57,7 +57,13 @@ Use the Agents SDK inside an `AgentsSdkRuntime` adapter for the loop, tool-call 
 
 Choose **Option C: Hybrid**.
 
-The initial real runtime will use the Python OpenAI Agents SDK behind `AgentRuntime`. No SDK type may cross into FastAPI schemas, domain entities, repositories, `MemoryStore`, `KnowledgeStore`, `VectorStore`, or persisted trace events. `OpenAIProvider` is the real provider adapter; `MockProvider` is deterministic and is the default for tests and the calculator demo when no API key is configured.
+The initial real runtime will use the Python OpenAI Agents SDK behind `AgentRuntime`. No SDK type
+may cross into FastAPI schemas, domain entities, repositories, `MemoryStore`, `KnowledgeStore`,
+`VectorStore`, or persisted trace events. `OpenAIProvider` resolves OpenAI Responses models and
+`DeepSeekProvider` resolves DeepSeek OpenAI-compatible Chat Completions models through the same
+`AgentsSdkRuntime`; `MockProvider` is deterministic and is the default for tests and the calculator
+demo when no API key is configured. Provider compatibility remains inside the provider/model
+resolver.
 
 Agent Studio will own:
 
@@ -88,9 +94,11 @@ The hybrid decision remains accepted. The implementation boundary is refined as 
 
 - `AgentLoop`, inside the runtime adapter layer, owns the outer `max_steps` loop, total timeout,
   cancellation, context budget, typed decision validation, tool policy, and normalized step events.
-- `AgentsSdkRuntime` remains the only Agents SDK adapter. It asks the SDK for one typed
-  `AgentDecision` per application step with `max_turns=1`; SDK types still do not cross the runtime
-  boundary.
+- `AgentsSdkRuntime` remains the only Agents SDK adapter. It consumes one provider-resolved streamed
+  model turn per application step with `max_turns=1`: OpenAI uses Responses and DeepSeek uses Chat
+  Completions. SDK function tools are capture-only translators: the
+  application validates and executes the resulting `ToolCall`; SDK types and raw stream events do
+  not cross the runtime boundary.
 - `ToolRegistry` and `ToolExecutor` remain application-owned and enforce schemas, permissions,
   timeouts, output limits, and structured failures.
 - `MockRuntime` and `AgentsSdkRuntime` share the same `AgentLoop`, so deterministic tests cover the
@@ -98,7 +106,8 @@ The hybrid decision remains accepted. The implementation boundary is refined as 
 
 This refinement does not replace the hybrid architecture with a provider-wide custom runtime. It
 moves only product policy and observable state to the application-owned outer loop; the Agents SDK
-continues to own OpenAI model invocation, typed output integration, provider tracing, and SDK error
+continues to own provider-resolved model invocation, streamed function-call translation (OpenAI
+Responses or DeepSeek Chat Completions), provider tracing where supported, and SDK error
 normalization inside its adapter.
 
 ## Consequences

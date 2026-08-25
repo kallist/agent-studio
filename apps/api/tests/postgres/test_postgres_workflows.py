@@ -440,8 +440,13 @@ async def test_postgresql_ingestion_claim_and_generation_consistency(
     failed_activation_job = await _replacement_job(postgres_app, str(accepted.document.id))
     original_activate: Callable[[UUID], Awaitable[None]] = repository.activate_job
 
-    async def fail_activation(job_id: UUID) -> None:
-        del job_id
+    async def fail_activation(
+        job_id: UUID,
+        embedding_provider: str,
+        embedding_model: str,
+        embedding_dimensions: int,
+    ) -> None:
+        del job_id, embedding_provider, embedding_model, embedding_dimensions
         raise RuntimeError("simulated PostgreSQL activation failure")
 
     monkeypatch.setattr(repository, "activate_job", fail_activation)

@@ -14,6 +14,13 @@ from app.memory.contracts import RuntimeMemory
 class RuntimeMode(StrEnum):
     MOCK = "mock"
     OPENAI = "openai"
+    DEEPSEEK = "deepseek"
+
+
+class ModelApiStyle(StrEnum):
+    DETERMINISTIC = "deterministic"
+    RESPONSES = "responses"
+    CHAT_COMPLETIONS = "chat_completions"
 
 
 class RunStatus(StrEnum):
@@ -132,9 +139,12 @@ class RunResult(BaseModel):
 
 
 class UsageMetrics(BaseModel):
+    requests: int | None = Field(default=None, ge=0)
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
+    cached_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
 
 
 class AgentEvent(BaseModel):
@@ -186,6 +196,8 @@ class RunObservability(BaseModel):
     agent_id: UUID
     runtime_type: str | None = None
     provider_type: str | None = None
+    api_style: str | None = None
+    model: str | None = None
     status: RunStatus
     termination_reason: str | None = None
     created_at: datetime
@@ -211,6 +223,30 @@ class DashboardObservability(BaseModel):
     success_rate: float | None = Field(default=None, ge=0, le=1)
     average_duration_ms: float | None = Field(default=None, ge=0)
     recent_runs: list[RunObservability] = Field(default_factory=list)
+
+
+class ProviderCapabilitiesView(BaseModel):
+    tool_calling: bool
+    structured_output: bool
+    reasoning_configuration: bool
+    streaming: bool
+    usage: bool
+    responses_only_fields: bool
+
+
+class ProviderReadiness(BaseModel):
+    provider: Literal["openai", "deepseek"]
+    configured: bool
+    default_model: str | None = None
+    api_style: ModelApiStyle
+    tracing_disabled: bool
+    selected: bool
+    capabilities: ProviderCapabilitiesView
+
+
+class ProviderCatalogReadiness(BaseModel):
+    selected_provider: Literal["openai", "deepseek"]
+    providers: list[ProviderReadiness]
 
 
 class ToolSpec(BaseModel):
@@ -252,6 +288,22 @@ class AgentDecision(BaseModel):
         return self
 
 
+class ProviderDecision(BaseModel):
+    """Application-safe result of one provider request.
+
+    SDK response objects and raw stream events deliberately stop at the runtime
+    adapter. Only bounded identifiers and aggregate usage cross this boundary.
+    """
+
+    decision: AgentDecision
+    provider: str = Field(min_length=1, max_length=80)
+    model: str = Field(min_length=1, max_length=160)
+    api_style: ModelApiStyle
+    usage: UsageMetrics
+    provider_request_id: str | None = Field(default=None, max_length=255)
+    stream_event_count: int = Field(default=0, ge=0)
+
+
 class AgentStep(BaseModel):
     index: int = Field(ge=1)
     decision: AgentDecision
@@ -270,7 +322,7 @@ class AgentContext(BaseModel):
 
 
 class RuntimeLimits(BaseModel):
-    max_steps: int = Field(default=8, ge=1, le=50)
+    max_steps: int = Field(default=3, ge=1, le=50)
     timeout_seconds: float = Field(default=30.0, gt=0, le=600)
     invalid_output_retries: int = Field(default=1, ge=0, le=3)
     max_context_chars: int = Field(default=32_000, ge=2_000, le=200_000)
@@ -323,6 +375,18 @@ class CancellationToken:
 
 class AgentRuntime(Protocol):
     @property
+    def runtime_name(self) -> str: ...
+
+    @property
+    def provider_name(self) -> str: ...
+
+    @property
+    def api_style(self) -> ModelApiStyle: ...
+
+    @property
+    def not_configured_message(self) -> str: ...
+
+    @property
     def is_configured(self) -> bool: ...
 
     async def run(
@@ -348,6 +412,7 @@ class KnowledgeBaseView(BaseModel):
     description: str
     embedding_provider: str
     embedding_model: str
+    embedding_dimensions: int = Field(gt=0)
     created_at: datetime
     document_count: int = 0
 
@@ -432,6 +497,8 @@ class EmbeddingProvider(Protocol):
     def dimensions(self) -> int: ...
 
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+    async def close(self) -> None: ...
 
 
 class VectorStore(Protocol):

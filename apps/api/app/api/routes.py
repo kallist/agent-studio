@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import (
@@ -35,6 +35,9 @@ from app.domain.contracts import (
     KnowledgeBaseView,
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
+    ProviderCapabilitiesView,
+    ProviderCatalogReadiness,
+    ProviderReadiness,
     RunObservability,
     RunRequest,
     RunResult,
@@ -42,6 +45,7 @@ from app.domain.contracts import (
 from app.domain.errors import (
     AgentStudioError,
     EntityNotFoundError,
+    KnowledgeProviderError,
     KnowledgeValidationError,
     ProviderNotConfiguredError,
 )
@@ -60,6 +64,7 @@ from app.evaluation.service import EvaluationService
 from app.knowledge.service import KnowledgeService
 from app.memory.contracts import MemoryRecord, MemorySettings, MemorySettingsUpdate
 from app.persistence.database import settings
+from app.runtime.providers import LLMProvider
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -96,6 +101,58 @@ async def health(request: Request) -> dict[str, str]:
         logger.warning("Database readiness check failed: %s", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Database is unavailable.") from exc
     return {"status": "ok"}
+
+
+def _provider_readiness(
+    provider: LLMProvider, selected_provider: str
+) -> ProviderReadiness:
+    capabilities = provider.capabilities
+    return ProviderReadiness(
+        provider=cast(Literal["openai", "deepseek"], provider.name),
+        configured=provider.is_configured,
+        default_model=provider.default_model,
+        api_style=provider.api_style,
+        tracing_disabled=provider.tracing_disabled,
+        selected=provider.name == selected_provider,
+        capabilities=ProviderCapabilitiesView(
+            tool_calling=capabilities.tool_calling,
+            structured_output=capabilities.structured_output,
+            reasoning_configuration=capabilities.reasoning_configuration,
+            streaming=capabilities.streaming,
+            usage=capabilities.usage,
+            responses_only_fields=capabilities.responses_only_fields,
+        ),
+    )
+
+
+def _model_providers(request: Request) -> tuple[dict[str, LLMProvider], str]:
+    providers = cast(dict[str, LLMProvider], request.app.state.model_providers)
+    selected = cast(str, request.app.state.selected_model_provider)
+    return providers, selected
+
+
+@router.get("/providers/readiness", response_model=ProviderCatalogReadiness)
+async def provider_readiness(request: Request) -> ProviderCatalogReadiness:
+    providers, selected = _model_providers(request)
+    return ProviderCatalogReadiness(
+        selected_provider=cast(Literal["openai", "deepseek"], selected),
+        providers=[
+            _provider_readiness(providers[name], selected)
+            for name in ("openai", "deepseek")
+        ],
+    )
+
+
+@router.get("/providers/openai/readiness", response_model=ProviderReadiness)
+async def openai_readiness(request: Request) -> ProviderReadiness:
+    providers, selected = _model_providers(request)
+    return _provider_readiness(providers["openai"], selected)
+
+
+@router.get("/providers/deepseek/readiness", response_model=ProviderReadiness)
+async def deepseek_readiness(request: Request) -> ProviderReadiness:
+    providers, selected = _model_providers(request)
+    return _provider_readiness(providers["deepseek"], selected)
 
 
 @router.post("/agents", response_model=AgentDefinition, status_code=status.HTTP_201_CREATED)
@@ -502,3 +559,5 @@ async def search_knowledge_base(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except KnowledgeValidationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KnowledgeProviderError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

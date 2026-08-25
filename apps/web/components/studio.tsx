@@ -12,7 +12,7 @@ import { MemoryPanel } from "@/components/memory-panel";
 import { Playground } from "@/components/playground";
 import { RunDetail } from "@/components/run-detail";
 import { ConfirmDialog, ErrorBanner, ToastRegion } from "@/components/ui";
-import { AgentDefinition, AgentEvent, api, ApiConnectionStatus, DashboardObservability, KnowledgeBase, MemoryRecord, reportApiConnection, RunObservability, RunResult, subscribeApiConnection } from "@/lib/api";
+import { AgentDefinition, AgentEvent, api, ApiConnectionStatus, DashboardObservability, KnowledgeBase, MemoryRecord, ProviderCatalogReadiness, reportApiConnection, RunObservability, RunResult, subscribeApiConnection } from "@/lib/api";
 import type { RunSnapshot, StudioView, ToastMessage } from "@/lib/studio-types";
 
 const defaultInput = "Calculate 128 * 37 + 456";
@@ -39,6 +39,7 @@ export function Studio() {
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
   const [memoryError, setMemoryError] = useState<string | null>(null);
   const [apiStatus, setApiStatus] = useState<ApiConnectionStatus>("checking");
+  const [providerReadiness, setProviderReadiness] = useState<ProviderCatalogReadiness | null>(null);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const streamRef = useRef<EventSource | null>(null);
@@ -149,8 +150,13 @@ export function Studio() {
     let active = true;
     async function load() {
       void api.health().catch(() => undefined);
-      const [loadedAgents] = await Promise.all([loadAgents(), loadKnowledgeBases()]);
+      const [loadedAgents, , readiness] = await Promise.all([
+        loadAgents(),
+        loadKnowledgeBases(),
+        api.getProviderReadiness().catch(() => null),
+      ]);
       if (!active) return;
+      setProviderReadiness(readiness);
       await refreshDashboard().catch(() => undefined);
       const params = new URLSearchParams(window.location.search);
       const requestedView = params.get("view");
@@ -249,7 +255,7 @@ export function Studio() {
       {error && <ErrorBanner message={error} onRetry={() => void loadAgents()} onDismiss={() => setError(null)} />}
       {view === "dashboard" && <Dashboard agents={agents} telemetry={telemetry} runs={history} loading={loading} onNavigate={navigate} onInspectRun={(item) => void inspectRun(item)} />}
       {view === "agents" && <AgentsPage agents={agents} knowledgeBases={knowledgeBases} runs={history} loading={loading} selectedId={selectedId} onCreate={() => navigate("builder")} onOpen={(agent) => selectAgent(agent.id)} />}
-      {view === "builder" && <><AgentBuilder saving={submitting} knowledgeBases={knowledgeBases} knowledgeLoading={knowledgeLoading} knowledgeError={knowledgeError} onReloadKnowledge={() => void loadKnowledgeBases()} onSave={createAgent} /><KnowledgeStudio bases={knowledgeBases} onBasesChange={(bases) => { setKnowledgeBases(bases); setKnowledgeError(null); }} /></>}
+      {view === "builder" && <><AgentBuilder saving={submitting} providerReadiness={providerReadiness} knowledgeBases={knowledgeBases} knowledgeLoading={knowledgeLoading} knowledgeError={knowledgeError} onReloadKnowledge={() => void loadKnowledgeBases()} onSave={createAgent} /><KnowledgeStudio bases={knowledgeBases} onBasesChange={(bases) => { setKnowledgeBases(bases); setKnowledgeError(null); }} /></>}
       {view === "playground" && <><Playground agents={agents} selected={selected} run={run} events={events} input={input} submitting={submitting} onSelectAgent={selectAgent} onInput={setInput} onRun={runAgent} onCancel={() => void cancelRun()} onBuild={() => navigate("builder")} onInspect={() => navigate("run")} onRequestClear={() => setConfirmClear(true)} />{selected && <MemoryPanel enabled={selected.memory_enabled} loading={memoryLoading} updating={memoryUpdating} error={memoryError} memories={memories} onDelete={(memoryId) => void deleteMemory(memoryId)} onToggle={(enabled) => void toggleMemory(enabled)} />}</>}
       {view === "evaluations" && <EvaluationStudio agents={agents} onViewRun={(runId) => void inspectRunId(runId)} />}
       {view === "run" && <RunDetail run={run} events={events} observability={observability} agent={selected} onBack={() => navigate(run?.run_kind === "evaluation" ? "evaluations" : "playground")} onRerun={rerun} />}

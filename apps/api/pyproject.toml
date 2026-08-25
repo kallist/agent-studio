@@ -8,6 +8,7 @@ dependencies = [
   "asyncpg==0.31.0",
   "fastapi==0.135.1",
   "openai-agents==0.20.0",
+  "openai==2.54.0",
   "pypdf==6.15.0",
   "pydantic-settings==2.14.2",
   "python-multipart==0.0.31",
@@ -36,6 +37,8 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
   "postgresql: requires the explicitly configured disposable PostgreSQL/pgvector test database",
+  "real_openai: explicit opt-in test that calls the real OpenAI API and may incur cost",
+  "real_deepseek: explicit opt-in test that calls the real DeepSeek API and may incur cost",
 ]
 
 [tool.ruff]

@@ -65,7 +65,10 @@ class KnowledgeService:
 
     async def create_base(self, request: KnowledgeBaseCreate) -> KnowledgeBaseView:
         return await self._repository.create_base(
-            request, self._embeddings.name, self._embeddings.model
+            request,
+            self._embeddings.name,
+            self._embeddings.model,
+            self._embeddings.dimensions,
         )
 
     async def list_bases(self) -> list[KnowledgeBaseView]:
@@ -144,7 +147,12 @@ class KnowledgeService:
                     for chunk, vector in zip(staged_chunks, vectors, strict=True)
                 ]
             )
-            await self._repository.activate_job(job_id)
+            await self._repository.activate_job(
+                job_id,
+                self._embeddings.name,
+                self._embeddings.model,
+                self._embeddings.dimensions,
+            )
         except DocumentParsingError as exc:
             await self._fail_ingestion(job_id, str(exc)[:1_000])
         except Exception:
@@ -167,9 +175,19 @@ class KnowledgeService:
     ) -> KnowledgeSearchResponse:
         for knowledge_base_id in knowledge_base_ids:
             base = await self._repository.get_base(knowledge_base_id)
+            active_contract = (
+                self._embeddings.name,
+                self._embeddings.model,
+                self._embeddings.dimensions,
+            )
+            stored_contracts = await self._repository.active_embedding_contracts(
+                knowledge_base_id
+            )
             if (
                 base.embedding_provider != self._embeddings.name
                 or base.embedding_model != self._embeddings.model
+                or base.embedding_dimensions != self._embeddings.dimensions
+                or any(contract != active_contract for contract in stored_contracts)
             ):
                 raise KnowledgeValidationError(
                     f"Knowledge base '{base.name}' requires re-ingestion with the "

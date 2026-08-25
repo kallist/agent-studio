@@ -91,17 +91,33 @@ class FailingActivationRepository(KnowledgeRepository):
         self.staged_chunk_ids = [chunk.id for chunk in chunks]
         return chunks
 
-    async def activate_job(self, job_id: UUID) -> None:
+    async def activate_job(
+        self,
+        job_id: UUID,
+        embedding_provider: str | None = None,
+        embedding_model: str | None = None,
+        embedding_dimensions: int | None = None,
+    ) -> None:
         self.activation_attempted = True
         if self.fail_next_activation:
             self.fail_next_activation = False
             raise RuntimeError("simulated activation failure")
-        await super().activate_job(job_id)
+        await super().activate_job(
+            job_id, embedding_provider, embedding_model, embedding_dimensions
+        )
 
 
 class RaisingAfterActivationRepository(KnowledgeRepository):
-    async def activate_job(self, job_id: UUID) -> None:
-        await super().activate_job(job_id)
+    async def activate_job(
+        self,
+        job_id: UUID,
+        embedding_provider: str | None = None,
+        embedding_model: str | None = None,
+        embedding_dimensions: int | None = None,
+    ) -> None:
+        await super().activate_job(
+            job_id, embedding_provider, embedding_model, embedding_dimensions
+        )
         raise RuntimeError("simulated lost activation acknowledgement")
 
 
@@ -122,6 +138,21 @@ class BlockingEmbeddingProvider(DeterministicEmbeddingProvider):
             return await super().embed(texts)
         finally:
             self.active_calls -= 1
+
+
+class ContractEmbeddingProvider(DeterministicEmbeddingProvider):
+    def __init__(self, provider: str, model: str) -> None:
+        super().__init__(dimensions=256)
+        self._provider = provider
+        self._model = model
+
+    @property
+    def name(self) -> str:
+        return self._provider
+
+    @property
+    def model(self) -> str:
+        return self._model
 
 
 async def create_base(client: AsyncClient, name: str = "RAG benchmark") -> dict[str, object]:
@@ -362,6 +393,112 @@ async def test_failed_reingestion_preserves_last_completed_generation(tmp_path: 
     assert current.results[0].chunk_id != completed_chunk_id
     assert "successful-replacement-generation" in current.results[0].content
     assert "stable-completed-generation" not in current.results[0].content
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reingestion_switches_embedding_contract_atomically_and_failed_switch_preserves_it(
+    tmp_path: Path,
+) -> None:
+    engine, sessions = build_database(
+        f"sqlite+aiosqlite:///{(tmp_path / 'provider-switch.db').as_posix()}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    repository = KnowledgeRepository(sessions)
+    vector_store = SqlAlchemyVectorStore(sessions)
+    local_embeddings = ContractEmbeddingProvider("local", "feature-hash-v1")
+    local_service = KnowledgeService(
+        repository,
+        vector_store,
+        local_embeddings,
+        tmp_path / "knowledge",
+        2_000,
+    )
+    local_service.bind_enqueue(lambda _job_id: None)
+    base = await local_service.create_base(
+        KnowledgeBaseCreate(name="Provider switch", description="Generation contract")
+    )
+    accepted = await local_service.queue_upload(
+        base.id,
+        "versioned.txt",
+        "text/plain",
+        b"local-generation-only fact",
+    )
+    await local_service.process_job(accepted.ingestion_job.id)
+
+    stored_file = next((tmp_path / "knowledge").iterdir())
+    stored_file.write_bytes(b"openai-generation-only fact")
+    async with sessions() as session:
+        replacement = IngestionJobModel(document_id=str(accepted.document.id), state="queued")
+        session.add(replacement)
+        await session.commit()
+        await session.refresh(replacement)
+        replacement_job_id = UUID(replacement.id)
+
+    openai_embeddings = ContractEmbeddingProvider("openai", "text-embedding-3-small")
+    openai_service = KnowledgeService(
+        repository,
+        vector_store,
+        openai_embeddings,
+        tmp_path / "knowledge",
+        2_000,
+    )
+    await openai_service.process_job(replacement_job_id)
+
+    switched = await openai_service.get_base(base.id)
+    assert (
+        switched.embedding_provider,
+        switched.embedding_model,
+        switched.embedding_dimensions,
+    ) == ("openai", "text-embedding-3-small", 256)
+    assert await repository.active_embedding_contracts(base.id) == {
+        ("openai", "text-embedding-3-small", 256)
+    }
+    with pytest.raises(KnowledgeValidationError, match="requires re-ingestion"):
+        await local_service.search(
+            [base.id],
+            KnowledgeSearchRequest(query="openai-generation-only", top_k=1),
+        )
+    active = await openai_service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="openai-generation-only", top_k=1),
+    )
+    assert active.results
+    assert "openai-generation-only" in active.results[0].content
+
+    stored_file.write_bytes(b"failed-model-switch must remain hidden")
+    async with sessions() as session:
+        failed_replacement = IngestionJobModel(
+            document_id=str(accepted.document.id), state="queued"
+        )
+        session.add(failed_replacement)
+        await session.commit()
+        await session.refresh(failed_replacement)
+        failed_job_id = UUID(failed_replacement.id)
+
+    failing_service = KnowledgeService(
+        repository,
+        FailingUpsertVectorStore(),
+        ContractEmbeddingProvider("openai", "text-embedding-3-large"),
+        tmp_path / "knowledge",
+        2_000,
+    )
+    with pytest.raises(RuntimeError, match="simulated vector write failure"):
+        await failing_service.process_job(failed_job_id)
+
+    preserved = await openai_service.get_base(base.id)
+    assert (preserved.embedding_provider, preserved.embedding_model) == (
+        "openai",
+        "text-embedding-3-small",
+    )
+    after_failure = await openai_service.search(
+        [base.id],
+        KnowledgeSearchRequest(query="openai-generation-only", top_k=3),
+    )
+    assert after_failure.results
+    assert all("failed-model-switch" not in item.content for item in after_failure.results)
     await engine.dispose()
 
 
