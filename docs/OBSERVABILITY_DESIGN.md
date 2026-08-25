@@ -134,7 +134,7 @@ redaction, and must not replace Run/RunEvent as product evidence or leak provide
 
 ## Synthetic performance baseline
 
-Task 13 performance evidence is separate from runtime Observability. Observability projects real
+Synthetic performance evidence is separate from runtime Observability. Observability projects real
 persisted Run/RunEvent behavior for debugging; the performance suite executes controlled synthetic
 work against a disposable test database and compares broad engineering thresholds. Its p50/p95 and
 throughput are regression signals, not production telemetry, capacity, or an SLA. The suite reuses

@@ -116,7 +116,7 @@ async def test_event_broker_queue_is_bounded() -> None:
 async def test_sse_stream_disconnect_releases_subscriber_and_run_remains_manageable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    blocking_input = "__task13_sse_disconnect_block__"
+    blocking_input = "__v1_sse_disconnect_block__"
     monkeypatch.setattr(settings, "mock_provider_block_input", blocking_input)
     app = create_app(
         f"sqlite+aiosqlite:///{(tmp_path / 'sse.db').as_posix()}",
@@ -220,7 +220,7 @@ async def test_graceful_shutdown_terminates_owned_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{(tmp_path / 'shutdown.db').as_posix()}"
-    blocking_input = "__task13_shutdown_block__"
+    blocking_input = "__v1_shutdown_block__"
     monkeypatch.setattr(settings, "mock_provider_block_input", blocking_input)
     app = create_app(database_url, str(tmp_path / "knowledge"))
     run_id: UUID

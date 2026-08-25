@@ -132,9 +132,9 @@ class ComposeHarness:
             raise ReliabilityFailure(f"{method} {path} failed safely: {type(exc).__name__}") from exc
 
     def upload_text(self, knowledge_base_id: str) -> dict[str, Any]:
-        boundary = "agent-studio-task13-boundary"
+        boundary = "agent-studio-v1-boundary"
         content = (
-            "Task 13 reliability evidence. The recovery codename is glacier-5192.\n\n"
+            "Agent Studio v1 reliability evidence. The recovery codename is glacier-5192.\n\n"
             "This synthetic document is safe for deterministic pgvector validation."
         ).encode()
         prefix = (
@@ -200,7 +200,7 @@ class ComposeHarness:
             "POST",
             "/agents",
             {
-                "name": "Task 13 Reliability Calculator",
+                "name": "V1 Reliability Calculator",
                 "instructions": "Use the calculator deterministically.",
                 "runtime_mode": "mock",
                 "tools": ["calculator"],
@@ -240,7 +240,7 @@ class ComposeHarness:
         status, knowledge_base = self.request(
             "POST",
             "/knowledge-bases",
-            {"name": "Task 13 Reliability RAG", "description": "Synthetic evidence"},
+            {"name": "V1 Reliability RAG", "description": "Synthetic evidence"},
         )
         if status != 201:
             raise ReliabilityFailure("Knowledge Base creation failed.")
@@ -264,7 +264,7 @@ class ComposeHarness:
             "POST",
             "/evaluation-suites",
             {
-                "name": "Task 13 Reliability Evaluation",
+                "name": "V1 Reliability Evaluation",
                 "agent_id": agent["id"],
                 "cases": [
                     {
@@ -417,7 +417,7 @@ class ComposeHarness:
         self.artifact_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
     def capture_diagnostics(self) -> None:
-        print("Task 13 Compose diagnostics (bounded):", file=sys.stderr)
+        print("Agent Studio v1 Compose diagnostics (bounded):", file=sys.stderr)
         try:
             print(self.compose_run("ps", "-a", capture=True, timeout=30), file=sys.stderr)
             for service in ("db", "api", "web"):
@@ -579,8 +579,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--browser-check", action="store_true")
     args = parser.parse_args()
-    if not args.project_name.startswith("agent-studio-task13-"):
-        parser.error("--project-name must start with agent-studio-task13-")
+    if not args.project_name.startswith("agent-studio-v1-"):
+        parser.error("--project-name must start with agent-studio-v1-")
     if not (1024 <= args.web_port <= 65535 and 1024 <= args.api_port <= 65535):
         parser.error("ports must be between 1024 and 65535")
     return args

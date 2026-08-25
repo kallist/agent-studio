@@ -48,7 +48,7 @@ export function AppShell({ view, hasRun, apiStatus, onNavigate, children }: { vi
         </nav>
         <div className="sidebar-footer">
           <div className={`environment-card connection-${apiStatus}`}><span className="environment-icon"><Icon name="terminal" /></span><div><strong>Local workspace</strong><small><span />{connectionLabel[apiStatus]}</small></div></div>
-          <p>Agent Studio <span>v0.1</span></p>
+          <p>Agent Studio <span>v1.0</span></p>
         </div>
       </aside>
       <div className="workspace">

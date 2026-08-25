@@ -1,8 +1,10 @@
 # Codex capability inventory
 
+> Historical environment audit. It is retained as development provenance, not as current Agent Studio product capability evidence. See [V1_STATUS.md](V1_STATUS.md) for release claims.
+
 Audit date: 2026-08-13 (Asia/Shanghai)
 
-Workspace: `C:\aiwork\agent-studio`
+Workspace at audit time: `<workspace>`
 
 Scope: capabilities actually visible or callable in this Codex Desktop session. Presence in a catalog is not treated as proof of a working connection.
 
@@ -18,7 +20,7 @@ This is a point-in-time environment audit. Later repository changes, including t
 ## Repository and instructions
 
 - Git was not present in this directory at audit start. It was initialized with branch `main`.
-- At audit start, no `AGENTS.md` was found in `C:\aiwork\agent-studio`, `C:\aiwork`, or `C:\`. The later engineering-baseline phase added the repository-level `AGENTS.md`.
+- At audit start, no `AGENTS.md` was found in the workspace hierarchy. The later engineering-baseline phase added the repository-level `AGENTS.md`.
 - The workspace was empty before initialization. No test configuration, package manifest, application framework, or business code existed.
 
 ## Skills

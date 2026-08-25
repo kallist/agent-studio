@@ -69,7 +69,7 @@ The production-like restart/recovery path is locally reusable:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/ci/docker_reliability.py `
-  --project-name agent-studio-task13-local `
+  --project-name agent-studio-v1-local `
   --artifact .artifacts/delivery-metadata.json
 ```
 

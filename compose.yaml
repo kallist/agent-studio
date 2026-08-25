@@ -11,7 +11,7 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    image: agent-studio-api:task12
+    image: agent-studio-api:v1-local
     restart: "no"
     user: "0:0"
     command: ["python", "-m", "app.persistence.runtime_secrets"]
@@ -60,7 +60,7 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    image: agent-studio-api:task12
+    image: agent-studio-api:v1-local
     restart: unless-stopped
     init: true
     environment:
@@ -110,7 +110,7 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    image: agent-studio-web:task12
+    image: agent-studio-web:v1-local
     restart: unless-stopped
     init: true
     environment:

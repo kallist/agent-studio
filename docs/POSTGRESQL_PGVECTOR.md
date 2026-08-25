@@ -178,7 +178,7 @@ or load test. Query-plan and large-corpus tuning belong to later performance wor
 
 ## Validated and remaining limits
 
-Validated in Task 10: PostgreSQL 17, pgvector extension/version discovery, fixed vector storage,
+Validated against real PostgreSQL 17: pgvector extension/version discovery, fixed vector storage,
 semantic/hybrid RAG, metadata filters/citations, HNSW presence, completed-only generations, real row
 locks, concurrent Memory dedupe, Evaluation, Observability, redaction, SQLite compatibility, and full
 browser E2E on both database backends.

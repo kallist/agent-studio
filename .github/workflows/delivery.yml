@@ -48,7 +48,7 @@ jobs:
       - name: Cold-start delivery and persistence validation
         run: |
           .venv/bin/python scripts/ci/docker_reliability.py \
-            --project-name "agent-studio-task13-delivery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --project-name "agent-studio-v1-delivery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --browser-check \
             --artifact .artifacts/delivery-metadata.json
           .venv/bin/python scripts/ci/validate_repository.py .artifacts/delivery-metadata.json
@@ -59,7 +59,7 @@ jobs:
           WEB_PORT: "3400"
         run: |
           set -euo pipefail
-          project="agent-studio-task13-delivery-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          project="agent-studio-v1-delivery-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cleanup() { docker compose --project-name "$project" -f compose.yaml down --volumes --remove-orphans; }
           trap cleanup EXIT
           docker compose --project-name "$project" -f compose.yaml up --build -d --wait --wait-timeout 300
