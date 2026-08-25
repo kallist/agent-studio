@@ -65,6 +65,8 @@ class EventBroker:
 
 
 class AgentService:
+    _SHUTDOWN_TIMEOUT_SECONDS = 5.0
+
     def __init__(
         self,
         repositories: Repositories,
@@ -448,6 +450,39 @@ class AgentService:
             await asyncio.shield(task)
         return await self._repositories.get_run(run_id)
 
+    async def recover_interrupted_runs(self) -> list[RunResult]:
+        """Fail persisted in-flight runs before accepting work after a restart."""
+
+        recovered: list[RunResult] = []
+        for run in await self._repositories.list_unfinished_runs():
+            recovered.append(await self.fail_interrupted_run(run.id))
+        return recovered
+
+    async def shutdown(self) -> None:
+        """Bound shutdown and leave every locally owned run in a terminal state."""
+
+        owned_run_ids = list(self._tasks)
+        for cancellation in self._cancellations.values():
+            cancellation.cancel()
+
+        tasks = list(self._tasks.values())
+        if tasks:
+            done, pending = await asyncio.wait(
+                tasks, timeout=self._SHUTDOWN_TIMEOUT_SECONDS
+            )
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                if not task.cancelled():
+                    task.exception()
+
+        for run_id in owned_run_ids:
+            run = await self._repositories.get_run(run_id)
+            if run.status in {RunStatus.PENDING, RunStatus.RUNNING}:
+                await self.fail_interrupted_run(run_id)
+
     async def fail_interrupted_run(self, run_id: UUID) -> RunResult:
         run = await self._repositories.get_run(run_id)
         if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}:
@@ -465,7 +500,7 @@ class AgentService:
                 payload={
                     "error": message,
                     "error_category": "process_restart",
-                    "termination_reason": "provider_error",
+                    "termination_reason": "process_restart",
                 },
             ),
             error=message,

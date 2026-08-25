@@ -173,6 +173,15 @@ Initial product surfaces should eventually be agent definitions, runs, trace tim
 - Contract tests verify normalization between Agents SDK events and application events.
 - Browser E2E tests exercise the real web-to-API-to-runtime path using deterministic providers.
 
+## Delivery and quality pipeline
+
+GitHub Actions treats Backend, PostgreSQL/pgvector, Frontend, Playwright, production image build,
+Reliability, and synthetic Performance as independent bounded quality projections over the same
+application contracts. Main delivery validation runs production Compose images from disposable
+volumes and emits SHA/image/test evidence. It does not publish an image or deploy a service. Run and
+RunEvent persistence remain product truth; CI summaries and performance artifacts are downstream
+evidence and never a second runtime data store. See `docs/CI_RELIABILITY_PERFORMANCE.md`.
+
 ## Deferred decisions
 
 Authentication/tenancy, durable background job infrastructure, artifact/object storage, formal

@@ -18,7 +18,7 @@ from app.knowledge.vector_store import PgVectorStore, _cosine
 from app.persistence.database import build_database
 from app.persistence.models import EmbeddingModel, IngestionJobModel
 
-pytestmark = [pytest.mark.postgresql, pytest.mark.asyncio]
+pytestmark = [pytest.mark.postgresql, pytest.mark.reliability, pytest.mark.asyncio]
 
 
 async def _wait_for_job(client: AsyncClient, job_id: str) -> dict[str, object]:

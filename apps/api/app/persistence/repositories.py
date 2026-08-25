@@ -259,6 +259,21 @@ class Repositories:
             rows = await session.scalars(statement)
             return [to_run(row) for row in rows]
 
+    async def list_unfinished_runs(self) -> list[RunResult]:
+        """Return persisted runs that cannot survive a single-process API restart."""
+
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(RunModel)
+                .where(
+                    RunModel.status.in_(
+                        [RunStatus.PENDING.value, RunStatus.RUNNING.value]
+                    )
+                )
+                .order_by(RunModel.created_at, RunModel.id)
+            )
+            return [to_run(row) for row in rows]
+
     async def count_runs_by_status(
         self, *, run_kind: RunKind = RunKind.NORMAL
     ) -> dict[RunStatus, int]:

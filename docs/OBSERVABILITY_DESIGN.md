@@ -131,3 +131,11 @@ and UI filtering. No latency assertion depends on sleeping or a minimum wall-clo
 A later adapter may export these application IDs, correlations, durations, and safe attributes to
 OpenTelemetry or a metrics backend. Export must remain downstream of this contract, preserve
 redaction, and must not replace Run/RunEvent as product evidence or leak provider SDK types.
+
+## Synthetic performance baseline
+
+Task 13 performance evidence is separate from runtime Observability. Observability projects real
+persisted Run/RunEvent behavior for debugging; the performance suite executes controlled synthetic
+work against a disposable test database and compares broad engineering thresholds. Its p50/p95 and
+throughput are regression signals, not production telemetry, capacity, or an SLA. The suite reuses
+real product paths but never writes benchmark results into Run/RunEvent or auto-updates its baseline.

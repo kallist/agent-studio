@@ -171,12 +171,14 @@ def create_app(
                 deepseek_provider.name: deepseek_provider,
             }
             app.state.selected_model_provider = settings.llm_provider
+            await service.recover_interrupted_runs()
             await worker.start()
             worker_started = True
             await evaluation_worker.start()
             evaluation_worker_started = True
             yield
         finally:
+            await service.shutdown()
             if evaluation_worker_started:
                 await evaluation_worker.stop()
             if worker_started:

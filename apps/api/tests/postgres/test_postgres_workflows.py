@@ -47,7 +47,7 @@ from app.persistence.models import (
 )
 from app.runtime.mock import MockRuntime
 
-pytestmark = [pytest.mark.postgresql, pytest.mark.asyncio]
+pytestmark = [pytest.mark.postgresql, pytest.mark.reliability, pytest.mark.asyncio]
 
 
 async def _create_agent(
@@ -465,7 +465,40 @@ async def test_postgresql_ingestion_claim_and_generation_consistency(
         b"new-successful-generation is now active evidence",
     )
     successful_job = await _replacement_job(postgres_app, str(accepted.document.id))
-    await service.process_job(successful_job)
+    activation_entered = asyncio.Event()
+    release_activation = asyncio.Event()
+
+    async def pause_before_activation(
+        job_id: UUID,
+        embedding_provider: str,
+        embedding_model: str,
+        embedding_dimensions: int,
+    ) -> None:
+        activation_entered.set()
+        await release_activation.wait()
+        await original_activate(
+            job_id, embedding_provider, embedding_model, embedding_dimensions
+        )
+
+    monkeypatch.setattr(repository, "activate_job", pause_before_activation)
+    processing = asyncio.create_task(service.process_job(successful_job))
+    await asyncio.wait_for(activation_entered.wait(), timeout=5)
+    try:
+        during_processing = await service.search(
+            [base.id], KnowledgeSearchRequest(query="new-successful-generation", top_k=5)
+        )
+        assert all(
+            "new-successful-generation" not in item.content
+            for item in during_processing.results
+        )
+        old_during_processing = await service.search(
+            [base.id], KnowledgeSearchRequest(query="stable-completed-generation", top_k=1)
+        )
+        assert old_during_processing.results
+        assert "stable-completed-generation" in old_during_processing.results[0].content
+    finally:
+        release_activation.set()
+        await processing
     assert (await service.get_job(successful_job)).state is IngestionState.COMPLETED
     replaced = await service.search(
         [base.id], KnowledgeSearchRequest(query="new-successful-generation", top_k=1)

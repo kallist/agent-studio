@@ -20,8 +20,10 @@ dependencies = [
 dev = [
   "httpx==0.28.1",
   "mypy==1.19.1",
+  "pip-audit==2.10.1",
   "pytest==9.0.3",
   "pytest-asyncio==1.3.0",
+  "PyYAML==6.0.3",
   "ruff==0.15.7",
 ]
 
@@ -36,7 +38,9 @@ packages = ["app"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
+  "performance: deterministic synthetic performance baseline (explicit opt-in)",
   "postgresql: requires the explicitly configured disposable PostgreSQL/pgvector test database",
+  "reliability: bounded recovery, concurrency, timeout, and lifecycle regression coverage",
   "real_openai: explicit opt-in test that calls the real OpenAI API and may incur cost",
   "real_deepseek: explicit opt-in test that calls the real DeepSeek API and may incur cost",
 ]

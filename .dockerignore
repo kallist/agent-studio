@@ -6,8 +6,11 @@ venv
 **/.next
 **/__pycache__
 **/.pytest_cache
+**/pytest-cache-files-*
 **/.mypy_cache
 **/.ruff_cache
+.artifacts
+.pytest-tmp
 **/coverage
 **/playwright-report
 **/test-results

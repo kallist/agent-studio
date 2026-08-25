@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "baseline_kind": "reviewed-engineering-baseline",
+  "baseline_source": "Task 13 initial local PostgreSQL 17 and pgvector 0.8.6 run",
+  "baseline_runtime": {
+    "source_git_sha": "a65c429013c0baad7c8bd8a0538e83c5531531be",
+    "python": "3.12.13",
+    "platform": "Windows",
+    "postgresql": "17.11",
+    "pgvector": "0.8.6"
+  },
+  "policy": {
+    "catastrophic_multiplier": 4.0,
+    "report_only_multiplier": 1.5,
+    "small_variation": "report-only",
+    "automatic_bless": false
+  },
+  "scenarios": {
+    "api_basic": {"p95_ms": 12.0, "throughput_per_s": 120.0},
+    "agent_sequential": {"p95_ms": 300.0, "throughput_per_s": 5.0},
+    "agent_concurrent": {"p95_ms": 1800.0, "throughput_per_s": 5.0},
+    "rag_ingestion": {"p95_ms": 1500.0, "throughput_per_s": 80.0},
+    "rag_semantic": {"p95_ms": 60.0, "throughput_per_s": 28.0},
+    "rag_hybrid": {"p95_ms": 60.0, "throughput_per_s": 22.0},
+    "memory_retrieval": {"p95_ms": 35.0, "throughput_per_s": 28.0},
+    "trace_read": {"p95_ms": 25.0, "throughput_per_s": 60.0},
+    "evaluation": {"p95_ms": 8000.0, "throughput_per_s": 2.5}
+  }
+}

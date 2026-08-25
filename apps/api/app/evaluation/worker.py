@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 class LocalEvaluationWorker:
     """Single-process bounded worker for deterministic offline evaluation."""
 
+    _SHUTDOWN_TIMEOUT_SECONDS = 5.0
+
     def __init__(self, service: EvaluationService, worker_count: int = 1) -> None:
         self._service = service
         self._worker_count = max(1, worker_count)
@@ -35,7 +37,13 @@ class LocalEvaluationWorker:
         for _ in self._tasks:
             self._queue.put_nowait(None)
         if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+            _done, pending = await asyncio.wait(
+                self._tasks, timeout=self._SHUTDOWN_TIMEOUT_SECONDS
+            )
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
         self._tasks.clear()
 
     async def _run(self) -> None:

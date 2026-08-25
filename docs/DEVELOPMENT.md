@@ -16,6 +16,9 @@
 | E2E | `pnpm --dir apps/web e2e` |
 | Production-like Docker stack | `.\scripts\docker-up.ps1` |
 | Docker E2E | `pnpm --dir apps/web e2e:docker` |
+| Reliability selection | `.\.venv\Scripts\pytest.exe apps/api/tests -m "reliability and not postgresql" -q` |
+| Performance baseline | `.\.venv\Scripts\pytest.exe apps/api/tests/postgres/test_performance_baseline.py -m performance -q -s` |
+| Repository/workflow safety | `.\.venv\Scripts\python.exe scripts/ci/validate_repository.py` |
 
 ## Persistence
 
@@ -55,3 +58,21 @@ pnpm --dir apps/web exec playwright install chromium
 The default E2E configuration starts host-native web and API servers and uses the deterministic Mock
 runtime. `e2e:docker` instead targets the running production-like Compose stack. Real OpenAI and
 DeepSeek execution are explicit opt-in suites and are not part of default tests.
+
+## CI and delivery reproduction
+
+Use the guarded PostgreSQL variables from `POSTGRESQL_PGVECTOR.md` for functional and performance
+database selections. Set `PERFORMANCE_OUTPUT=.artifacts/performance-summary.json` for a
+machine-readable result; this never changes `docs/performance-baseline.json`.
+
+The production-like restart/recovery path is locally reusable:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/ci/docker_reliability.py `
+  --project-name agent-studio-task13-local `
+  --artifact .artifacts/delivery-metadata.json
+```
+
+The project-name prefix is mandatory so the runner can operate only its own Compose resources. See
+`docs/CI_RELIABILITY_PERFORMANCE.md` for the CI matrix, timeouts, artifact policy, and main delivery
+meaning.

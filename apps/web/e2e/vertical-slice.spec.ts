@@ -544,7 +544,7 @@ test("creates and runs a Calculator Evaluation through the UI with a linked real
   await expect(page.getByText("Agent saved", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Evaluations", exact: true }).click();
-  await page.getByRole("button", { name: "Create suite", exact: true }).click();
+  await page.locator(".page-header").getByRole("button", { name: "Create suite", exact: true }).click();
   await page.getByLabel("Suite name").fill(suiteName);
   await page.getByRole("combobox", { name: "Agent", exact: true }).selectOption({ label: agentName });
   await page.getByLabel("Case name").fill("Calculator basic arithmetic");

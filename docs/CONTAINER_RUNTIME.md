@@ -52,7 +52,7 @@ claim.
 
 ## 8. PostgreSQL and pgvector
 
-The database image is `pgvector/pgvector:pg17`. It is not published to the host. FastAPI selects
+The database image is `pgvector/pgvector:0.8.6-pg17`. It is not published to the host. FastAPI selects
 only `postgresql+asyncpg`, and an unavailable database or pgvector initializer prevents readiness;
 there is no Docker-to-SQLite fallback.
 
@@ -212,6 +212,7 @@ stop/start persistence testing, not a physical Windows reboot.
 
 ## 31. Future deployment work
 
-Task 13 may address CI/CD, reliability, performance, failure testing, release automation, image
-scanning/signing, backup verification, and measured resource policy. Internet-service architecture
-requires separate Auth/tenancy/ingress/managed-infrastructure decisions.
+Task 13 adds CI/CD foundations, bounded restart/failure testing, and a synthetic engineering
+performance baseline as documented in `CI_RELIABILITY_PERFORMANCE.md`. Image publication/signing,
+backup verification, and internet-service architecture still require separate
+Auth/tenancy/ingress/managed-infrastructure decisions.
