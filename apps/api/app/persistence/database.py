@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Literal, Self
 from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
@@ -14,17 +16,25 @@ from sqlalchemy.ext.asyncio import (
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", hide_input_in_errors=True
+    )
 
-    database_url: str = "sqlite+aiosqlite:///./agent_studio.db"
-    openai_api_key: str | None = None
+    app_env: Literal["development", "production-like"] = "development"
+    database_url: str = Field(
+        default="sqlite+aiosqlite:///./agent_studio.db", repr=False
+    )
+    database_url_file: Path | None = None
+    openai_api_key: str | None = Field(default=None, repr=False)
+    openai_api_key_file: Path | None = None
     openai_model: str | None = None
     openai_agents_disable_tracing: bool = True
     openai_request_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     openai_max_retries: int = Field(default=2, ge=0, le=5)
     openai_max_output_tokens: int = Field(default=512, ge=64, le=4_096)
     llm_provider: str = "openai"
-    deepseek_api_key: str | None = None
+    deepseek_api_key: str | None = Field(default=None, repr=False)
+    deepseek_api_key_file: Path | None = None
     deepseek_model: str | None = "deepseek-v4-flash"
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_request_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
@@ -42,6 +52,7 @@ class Settings(BaseSettings):
     evaluation_worker_count: int = Field(default=1, ge=1, le=8)
     embedding_provider: str = "local"
     openai_embedding_model: str = "text-embedding-3-small"
+    require_llm_provider_configured: bool = False
 
     @field_validator(
         "openai_api_key",
@@ -100,6 +111,77 @@ class Settings(BaseSettings):
         if not entries or "*" in entries:
             raise ValueError("Network origin and host lists must be explicit and non-empty.")
         return ",".join(entries)
+
+    @model_validator(mode="after")
+    def load_runtime_secret_files(self) -> Self:
+        """Resolve optional runtime secret files without logging secret material."""
+
+        resolved_database_url = self._resolve_secret_file(
+            direct_name="DATABASE_URL",
+            direct_value=self.database_url,
+            file_name="DATABASE_URL_FILE",
+            file_path=self.database_url_file,
+            direct_was_configured="database_url" in self.model_fields_set,
+        )
+        if resolved_database_url is None:
+            raise ValueError("DATABASE_URL configuration is required.")
+        self.database_url = resolved_database_url
+        self.openai_api_key = self._resolve_secret_file(
+            direct_name="OPENAI_API_KEY",
+            direct_value=self.openai_api_key,
+            file_name="OPENAI_API_KEY_FILE",
+            file_path=self.openai_api_key_file,
+            direct_was_configured=self.openai_api_key is not None,
+        )
+        self.deepseek_api_key = self._resolve_secret_file(
+            direct_name="DEEPSEEK_API_KEY",
+            direct_value=self.deepseek_api_key,
+            file_name="DEEPSEEK_API_KEY_FILE",
+            file_path=self.deepseek_api_key_file,
+            direct_was_configured=self.deepseek_api_key is not None,
+        )
+
+        if self.require_llm_provider_configured:
+            selected_key = (
+                self.openai_api_key
+                if self.llm_provider == "openai"
+                else self.deepseek_api_key
+            )
+            if not selected_key:
+                provider_name = "OpenAI" if self.llm_provider == "openai" else "DeepSeek"
+                raise ValueError(f"{provider_name} API key is not configured.")
+        return self
+
+    @staticmethod
+    def _resolve_secret_file(
+        *,
+        direct_name: str,
+        direct_value: str | None,
+        file_name: str,
+        file_path: Path | None,
+        direct_was_configured: bool,
+    ) -> str | None:
+        if file_path is None:
+            return direct_value
+        if direct_was_configured:
+            raise ValueError(f"Configure only one of {direct_name} and {file_name}.")
+
+        try:
+            if not file_path.is_file():
+                raise ValueError(f"{file_name} must reference a readable regular file.")
+            if file_path.stat().st_size > 64 * 1024:
+                raise ValueError(f"{file_name} exceeds the 64 KiB secret-file limit.")
+            secret = file_path.read_text(encoding="utf-8").strip()
+        except UnicodeError as exc:
+            raise ValueError(f"{file_name} must contain UTF-8 text.") from exc
+        except OSError as exc:
+            raise ValueError(f"{file_name} could not be read.") from exc
+
+        if not secret:
+            raise ValueError(f"{file_name} must not be empty or whitespace-only.")
+        if "\x00" in secret:
+            raise ValueError(f"{file_name} contains invalid text.")
+        return secret
 
 
 settings = Settings()

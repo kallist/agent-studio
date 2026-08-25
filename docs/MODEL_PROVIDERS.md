@@ -41,12 +41,16 @@ Both runtimes may be registered, but a run uses only its selected provider and n
 OpenAI:
 
 - `OPENAI_API_KEY`: server environment only.
+- `OPENAI_API_KEY_FILE`: runtime secret-file alternative. Configuring both direct and file values
+  fails closed; the Docker helper streams the host value into an API-only named volume over stdin.
 - `OPENAI_MODEL`: optional default; an Agent model overrides it.
 - `OPENAI_AGENTS_DISABLE_TRACING=1`: default.
 
 DeepSeek:
 
 - `DEEPSEEK_API_KEY`: server environment only.
+- `DEEPSEEK_API_KEY_FILE`: runtime secret-file alternative. Configuring both direct and file values
+  fails closed; the Docker helper streams the host value into an API-only named volume over stdin.
 - `DEEPSEEK_MODEL=deepseek-v4-flash`: current default test/runtime model.
 - `DEEPSEEK_BASE_URL=https://api.deepseek.com`: official origin. Validation rejects alternate,
   insecure, credential-bearing, query-bearing, and fragment-bearing URLs.
@@ -92,6 +96,16 @@ application-owned RAG, Memory retrieval, and a real Evaluation case that referen
 Run. The PostgreSQL gate uses deterministic local embeddings plus pgvector plus DeepSeek. The
 explicit Playwright suite covers Basic Run, Calculator, RAG, and Memory. Online tests are billable
 and nondeterministic; current results must be reported separately from OpenAI live gates.
+
+## Container provider profiles
+
+The default `compose.yaml` starts the deterministic Mock demo without mounting any provider key.
+`docker-up.ps1 -Provider deepseek` streams the host value over stdin to a removed-after-use
+initializer, then `compose.deepseek.yaml` mounts that project-scoped provider volume only into API
+and requires provider configuration during startup. Missing key material fails clearly and cannot
+fall back to Mock. `compose.openai.yaml` implements the equivalent `OPENAI_API_KEY_FILE` path.
+DeepSeek's provider behavior was validated in Task 11; a current container smoke must be reported
+separately. Real OpenAI container validation remains **NOT TESTED**.
 
 Official references used for this boundary:
 

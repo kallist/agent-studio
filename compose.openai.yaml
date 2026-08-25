@@ -1,0 +1,17 @@
+services:
+  secret-init:
+    environment:
+      PROVIDER_SECRET_DIRECTORY: /run/agent-studio-provider-secrets
+    volumes:
+      - provider_secrets:/run/agent-studio-provider-secrets
+
+  api:
+    environment:
+      LLM_PROVIDER: openai
+      OPENAI_API_KEY_FILE: /run/agent-studio-provider-secrets/openai_api_key
+      REQUIRE_LLM_PROVIDER_CONFIGURED: "1"
+    volumes:
+      - provider_secrets:/run/agent-studio-provider-secrets:ro
+
+volumes:
+  provider_secrets:

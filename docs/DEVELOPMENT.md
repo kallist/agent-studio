@@ -14,21 +14,35 @@
 | Frontend unit tests | `pnpm --dir apps/web test:run` |
 | Frontend build | `pnpm --dir apps/web build` |
 | E2E | `pnpm --dir apps/web e2e` |
+| Production-like Docker stack | `.\scripts\docker-up.ps1` |
+| Docker E2E | `pnpm --dir apps/web e2e:docker` |
 
 ## Persistence
 
-The application defaults to `sqlite+aiosqlite:///./agent_studio.db`. This is a temporary local fallback selected because Docker Desktop's daemon was not running during the vertical-slice build. Repository and application contracts contain no SQLite-specific behavior, and local database files are ignored.
+Host-native development defaults to the ignored
+`sqlite+aiosqlite:///./agent_studio.db` file. Repository and application contracts contain no
+SQLite-specific behavior.
 
-PostgreSQL/pgvector remains preferred. Once Docker Desktop is available:
+The recommended production-like local runtime is the complete Docker stack in `compose.yaml`. It
+starts PostgreSQL 17 plus pgvector, the FastAPI API, and the standalone Next.js server, generates a
+project-scoped database credential in a named volume, and waits for health dependencies:
 
-1. Set a local-only `POSTGRES_PASSWORD` and async `DATABASE_URL` in ignored environment configuration.
-2. Run `docker compose config`.
-3. Run `docker compose up -d db` and wait for health.
-4. Start the API with that `DATABASE_URL`.
+```powershell
+.\scripts\docker-up.ps1
+```
+
+See `docs/CONTAINER_RUNTIME.md` for lifecycle, provider-secret, backup, recovery, port, and explicit
+production-readiness boundaries. The Docker runtime fails closed when PostgreSQL is unavailable and
+never falls back to SQLite.
 
 ## OpenAI mode
 
-Mock mode is the default demo and test path. For opt-in OpenAI runs, set `OPENAI_API_KEY` only in the process environment or an ignored local `.env`. Never place a value in `.env.example` or source control. The SDK integration is isolated in `apps/api/app/runtime/agents_sdk.py`.
+Mock mode is the default demo and test path. For host-native opt-in OpenAI or DeepSeek runs, set the
+provider key only in the process environment or an ignored local `.env`. In the Docker runtime, use
+`docker-up.ps1 -Provider openai` or `-Provider deepseek`; the helper streams the selected key to an
+API-only named volume and mounts it as a secret file. Never place a value in `.env.example` or source
+control. Provider integrations remain
+isolated behind the application runtime/provider boundaries.
 
 ## Testing notes
 
@@ -38,4 +52,6 @@ Playwright owns its Chromium browser dependency. Install it once with:
 pnpm --dir apps/web exec playwright install chromium
 ```
 
-The E2E configuration starts both web and API servers and uses the deterministic Mock runtime. Real OpenAI execution is not part of default tests.
+The default E2E configuration starts host-native web and API servers and uses the deterministic Mock
+runtime. `e2e:docker` instead targets the running production-like Compose stack. Real OpenAI and
+DeepSeek execution are explicit opt-in suites and are not part of default tests.

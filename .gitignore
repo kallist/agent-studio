@@ -38,6 +38,8 @@ playwright-report/
 test-results/
 blob-report/
 screenshots/
+videos/
+trace.zip
 
 # Local databases and runtime state
 *.db
@@ -46,6 +48,10 @@ screenshots/
 *.sqlite
 *.sqlite3
 data/
+.runtime-secrets/
+docker-data/
+*.dump
+*.sql.gz
 
 # Logs and temporary files
 *.log

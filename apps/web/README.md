@@ -1,5 +1,9 @@
-# Web application placeholder
+# Agent Studio web
 
-This directory will own the Next.js frontend described in `docs/ARCHITECTURE.md`.
+This directory owns the Next.js frontend described in `docs/ARCHITECTURE.md`. It includes Studio,
+Playground, Knowledge, Runs, Evaluation, and Dashboard product paths with Vitest and Playwright
+coverage.
 
-Status: **NOT IMPLEMENTED**. No package manifest, dependency, component, or mock product UI is included in the engineering baseline.
+For the recommended production-like local runtime, start the repository-level Docker Compose stack;
+the browser uses same-origin `/api` requests proxied by the standalone Next.js server. Host-native
+development remains available through the commands in `docs/DEVELOPMENT.md`.
