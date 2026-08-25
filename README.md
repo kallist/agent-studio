@@ -20,6 +20,15 @@ The first runnable vertical slice now supports:
 See [ADR-001](docs/ADR/001-agent-runtime.md) for the accepted hybrid runtime boundary.
 See [Memory System v1](docs/MEMORY_DESIGN.md) for write, retrieval, expiration, deletion, and isolation policy.
 
+## Automated quality gates
+
+Pull requests and main changes are configured for independent Backend, real PostgreSQL/pgvector,
+Frontend, Playwright, Docker, Reliability, and Performance GitHub Actions checks. Default CI uses
+only the deterministic Mock provider; real DeepSeek is a separate protected, manual workflow.
+Main delivery validation builds and runs production images and emits delivery-ready evidence, but
+does not deploy publicly or push a registry. See
+[CI, reliability, performance, and delivery](docs/CI_RELIABILITY_PERFORMANCE.md).
+
 ## Docker quick start — recommended
 
 Prerequisite: Docker Desktop, or Docker Engine with Docker Compose. No Python, Node.js, pnpm,
@@ -142,6 +151,14 @@ pnpm --dir apps/web typecheck
 pnpm --dir apps/web test:run
 pnpm --dir apps/web build
 pnpm --dir apps/web e2e
+```
+
+Reliability and performance are explicit selections:
+
+```powershell
+.\.venv\Scripts\pytest.exe apps/api/tests -m "reliability and not postgresql" -q
+$env:PERFORMANCE_OUTPUT = ".artifacts/performance-summary.json"
+.\.venv\Scripts\pytest.exe apps/api/tests/postgres/test_performance_baseline.py -m performance -q -s
 ```
 
 The PostgreSQL integration suite requires the disposable, loopback-only test service and explicit

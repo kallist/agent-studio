@@ -1459,6 +1459,7 @@ async def test_knowledge_search_tool_permission_and_scope_failures_are_classifie
 
 
 @pytest.mark.asyncio
+@pytest.mark.reliability
 async def test_worker_recovers_queued_and_processing_jobs_without_duplicate_chunks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

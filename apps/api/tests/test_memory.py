@@ -192,6 +192,7 @@ async def test_memory_disabled_prevents_writes(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.reliability
 async def test_disable_wins_serialization_before_run_finalization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -263,6 +264,7 @@ async def test_disable_wins_serialization_before_run_finalization(
 
 
 @pytest.mark.asyncio
+@pytest.mark.reliability
 async def test_finalization_wins_then_disable_blocks_future_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -408,6 +410,7 @@ async def test_expired_memory_is_physically_purged(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.reliability
 async def test_terminal_event_failure_rolls_back_memory_and_run_completion(
     tmp_path: Path,
 ) -> None:
@@ -488,6 +491,7 @@ async def test_concurrent_duplicate_writes_upsert_one_agent_scoped_memory(
 
 
 @pytest.mark.asyncio
+@pytest.mark.reliability
 async def test_two_concurrent_runs_dedupe_through_complete_application_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

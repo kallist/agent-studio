@@ -1,0 +1,308 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DEEPSEEK_API_KEY: ""
+  OPENAI_API_KEY: ""
+  RUN_REAL_DEEPSEEK_TESTS: "0"
+  RUN_REAL_OPENAI_TESTS: "0"
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Install clean backend environment
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e './apps/api[dev]'
+          .venv/bin/python -m pip check
+      - name: Static quality and repository safety
+        run: |
+          .venv/bin/ruff check apps/api scripts/ci
+          .venv/bin/mypy apps/api/app
+          .venv/bin/python scripts/ci/validate_repository.py
+          git diff --check
+      - name: Offline backend tests
+        run: |
+          .venv/bin/pytest apps/api/tests -m "not postgresql and not real_openai and not real_deepseek and not performance" -q
+      - name: Python dependency audit
+        run: |
+          rm -rf /tmp/agent-studio-runtime-audit
+          .venv/bin/python -m pip install --target /tmp/agent-studio-runtime-audit ./apps/api
+          .venv/bin/python -m pip_audit --path /tmp/agent-studio-runtime-audit --skip-editable \
+            --progress-spinner off --format json --aliases \
+            --output /tmp/agent-studio-python-audit.json || test -s /tmp/agent-studio-python-audit.json
+          .venv/bin/python scripts/ci/audit_python_runtime.py /tmp/agent-studio-python-audit.json
+      - name: Backend summary
+        if: always()
+        run: |
+          echo "### Backend" >> "$GITHUB_STEP_SUMMARY"
+          echo "Offline pytest, Ruff, strict mypy, pip check, repository safety, and pip-audit executed." >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify tests did not change tracked files
+        run: git diff --exit-code
+
+  postgresql:
+    name: PostgreSQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      POSTGRES_TEST_ALLOW_DESTRUCTIVE_RESET: I_UNDERSTAND_THIS_DROPS_TEST_TABLES
+      POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://agent_studio_test:task13-ci-only@127.0.0.1:55432/agent_studio_test
+      POSTGRES_NO_VECTOR_TEST_DATABASE_URL: postgresql+asyncpg://agent_studio_limited_test:not-a-secret-test-only@127.0.0.1:55432/agent_studio_no_vector_test
+      POSTGRES_TEST_PASSWORD: task13-ci-only
+      TASK13_PG_PROJECT: agent-studio-task13-pg-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Install backend
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e './apps/api[dev]'
+      - name: Start disposable PostgreSQL 17 and pgvector 0.8.6
+        run: |
+          set -euo pipefail
+          docker compose --project-name "$TASK13_PG_PROJECT" -f compose.postgres-test.yaml up -d --wait --wait-timeout 120
+      - name: Real PostgreSQL and pgvector integration
+        run: |
+          .venv/bin/pytest apps/api/tests/postgres -m "postgresql and not performance and not real_openai and not real_deepseek" -q
+      - name: PostgreSQL summary
+        if: always()
+        run: |
+          echo "### PostgreSQL" >> "$GITHUB_STEP_SUMMARY"
+          echo "PostgreSQL 17, pgvector extension/vector(256)/HNSW, RAG, Memory locking, Evaluation, Observability, and Security integration executed." >> "$GITHUB_STEP_SUMMARY"
+      - name: Cleanup disposable PostgreSQL
+        if: always()
+        run: docker compose --project-name "$TASK13_PG_PROJECT" -f compose.postgres-test.yaml down --volumes --remove-orphans
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: Frozen frontend install
+        run: pnpm --dir apps/web install --frozen-lockfile
+      - name: Frontend quality gates
+        run: |
+          pnpm --dir apps/web test:run
+          pnpm --dir apps/web typecheck
+          pnpm --dir apps/web lint
+          pnpm --dir apps/web build --webpack
+      - name: Production dependency audit
+        run: pnpm --dir apps/web audit --prod --audit-level high
+      - name: Frontend summary
+        if: always()
+        run: |
+          echo "### Frontend" >> "$GITHUB_STEP_SUMMARY"
+          echo "Frozen pnpm install, Vitest, strict TypeScript, ESLint, webpack production build, and production audit executed." >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify build did not change tracked files
+        run: git diff --exit-code
+
+  playwright:
+    name: Playwright
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: Install applications and Chromium
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -e './apps/api[dev]'
+          pnpm --dir apps/web install --frozen-lockfile
+          pnpm --dir apps/web exec playwright install --with-deps chromium
+      - name: Deterministic browser E2E
+        run: pnpm --dir apps/web e2e:ci
+      - name: Playwright summary
+        if: always()
+        run: |
+          echo "### Playwright" >> "$GITHUB_STEP_SUMMARY"
+          echo "Default Mock-only browser suite executed with health-based webServer readiness." >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: ignore
+          retention-days: 5
+
+  docker:
+    name: Docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose and clean production image builds
+        run: |
+          docker compose config --quiet
+          python3 scripts/ci/validate_compose_security.py
+          docker compose build api web
+      - name: Validate production image users
+        run: |
+          test "$(docker image inspect agent-studio-api:task12 --format '{{.Config.User}}')" = "10001:10001"
+          test "$(docker image inspect agent-studio-web:task12 --format '{{.Config.User}}')" = "10001:10001"
+      - name: Docker summary
+        if: always()
+        run: |
+          echo "### Docker" >> "$GITHUB_STEP_SUMMARY"
+          echo "Compose configuration and clean API/Web production image builds executed; no registry push." >> "$GITHUB_STEP_SUMMARY"
+
+  reliability:
+    name: Reliability
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: Install reliability test environment
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -e './apps/api[dev]'
+          pnpm --dir apps/web install --frozen-lockfile
+          pnpm --dir apps/web exec playwright install --with-deps chromium
+      - name: Deterministic reliability regression selection
+        run: .venv/bin/pytest apps/api/tests -m "reliability and not postgresql" -q
+      - name: Container restart, recovery, and persistence validation
+        run: |
+          .venv/bin/python scripts/ci/docker_reliability.py \
+            --project-name "agent-studio-task13-reliability-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --browser-check \
+            --artifact .artifacts/reliability-metadata.json
+          .venv/bin/python scripts/ci/validate_repository.py .artifacts/reliability-metadata.json
+      - name: Reliability summary
+        if: always()
+        run: |
+          echo "### Reliability" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deterministic recovery/concurrency/timeout tests plus project-scoped API/Web/DB restart, pool recovery, persistence, and graceful shutdown executed." >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload reliability metadata
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliability-metadata-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/reliability-metadata.json
+          retention-days: 7
+      - name: Upload reliability browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliability-browser-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: ignore
+          retention-days: 5
+
+  performance:
+    name: Performance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      PERFORMANCE_OUTPUT: .artifacts/performance-summary.json
+      POSTGRES_TEST_ALLOW_DESTRUCTIVE_RESET: I_UNDERSTAND_THIS_DROPS_TEST_TABLES
+      POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://agent_studio_test:task13-perf-only@127.0.0.1:55432/agent_studio_test
+      POSTGRES_NO_VECTOR_TEST_DATABASE_URL: postgresql+asyncpg://agent_studio_limited_test:not-a-secret-test-only@127.0.0.1:55432/agent_studio_no_vector_test
+      POSTGRES_TEST_PASSWORD: task13-perf-only
+      TASK13_PERF_PROJECT: agent-studio-task13-perf-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Install benchmark environment
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -e './apps/api[dev]'
+      - name: Start benchmark PostgreSQL
+        run: |
+          docker compose --project-name "$TASK13_PERF_PROJECT" -f compose.postgres-test.yaml up -d --wait --wait-timeout 120
+      - name: Deterministic performance baseline
+        run: .venv/bin/pytest apps/api/tests/postgres/test_performance_baseline.py -m performance -q -s
+      - name: Validate and summarize performance evidence
+        id: performance-evidence
+        if: always()
+        run: |
+          if [ -f "$PERFORMANCE_OUTPUT" ]; then
+            .venv/bin/python scripts/ci/validate_repository.py "$PERFORMANCE_OUTPUT"
+            .venv/bin/python scripts/ci/render_performance_summary.py "$PERFORMANCE_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Performance" >> "$GITHUB_STEP_SUMMARY"
+            echo "No performance JSON was produced; inspect the pytest log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Performance summary
+        if: always()
+        run: |
+          echo "### Performance" >> "$GITHUB_STEP_SUMMARY"
+          echo "Synthetic PostgreSQL/pgvector Agent, RAG, Memory, Trace, Evaluation, and concurrency baseline executed with catastrophic-regression thresholds." >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload bounded performance evidence
+        if: always() && steps.performance-evidence.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/performance-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Cleanup benchmark PostgreSQL
+        if: always()
+        run: docker compose --project-name "$TASK13_PERF_PROJECT" -f compose.postgres-test.yaml down --volumes --remove-orphans

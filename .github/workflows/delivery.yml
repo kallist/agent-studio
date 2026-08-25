@@ -1,0 +1,89 @@
+name: Delivery Validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delivery-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DEEPSEEK_API_KEY: ""
+  OPENAI_API_KEY: ""
+  RUN_REAL_DEEPSEEK_TESTS: "0"
+  RUN_REAL_OPENAI_TESTS: "0"
+
+jobs:
+  delivery:
+    name: Delivery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: Install delivery validation tools
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -e './apps/api[dev]'
+          pnpm --dir apps/web install --frozen-lockfile
+          pnpm --dir apps/web exec playwright install --with-deps chromium
+      - name: Cold-start delivery and persistence validation
+        run: |
+          .venv/bin/python scripts/ci/docker_reliability.py \
+            --project-name "agent-studio-task13-delivery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --browser-check \
+            --artifact .artifacts/delivery-metadata.json
+          .venv/bin/python scripts/ci/validate_repository.py .artifacts/delivery-metadata.json
+      - name: Containerized full E2E
+        env:
+          API_PORT: "8400"
+          DOCKER_E2E_BASE_URL: http://127.0.0.1:3400
+          WEB_PORT: "3400"
+        run: |
+          set -euo pipefail
+          project="agent-studio-task13-delivery-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() { docker compose --project-name "$project" -f compose.yaml down --volumes --remove-orphans; }
+          trap cleanup EXIT
+          docker compose --project-name "$project" -f compose.yaml up --build -d --wait --wait-timeout 300
+          pnpm --dir apps/web e2e:docker
+      - name: Delivery summary
+        if: always()
+        run: |
+          echo "### Delivery Validation" >> "$GITHUB_STEP_SUMMARY"
+          echo "Production images, fresh Compose startup, Calculator, tiny RAG/pgvector, Memory, Evaluation, restart persistence, and container E2E executed." >> "$GITHUB_STEP_SUMMARY"
+          echo "This evidence means DELIVERY READY; it does not mean deployed, and no registry push occurs." >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload delivery metadata
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-metadata-${{ github.sha }}
+          path: .artifacts/delivery-metadata.json
+          retention-days: 7
+      - name: Upload container E2E failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: ignore
+          retention-days: 5

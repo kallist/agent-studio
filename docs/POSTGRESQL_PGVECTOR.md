@@ -136,7 +136,7 @@ these workflows.
 
 ## Test infrastructure and safety
 
-`compose.postgres-test.yaml` runs only `pgvector/pgvector:pg17`, binds to
+`compose.postgres-test.yaml` runs only `pgvector/pgvector:0.8.6-pg17`, binds to
 `127.0.0.1:55432`, uses a healthcheck, and stores the database in container tmpfs. Stopping/removing
 the service deletes all test data.
 

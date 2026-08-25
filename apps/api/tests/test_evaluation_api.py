@@ -636,6 +636,7 @@ async def test_evaluation_rejects_executable_grader_and_policy_bypassing_memory_
 
 
 @pytest.mark.asyncio
+@pytest.mark.reliability
 async def test_recovery_marks_interrupted_case_and_underlying_run_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

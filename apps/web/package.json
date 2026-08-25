@@ -12,7 +12,9 @@
     "test": "vitest",
     "test:run": "vitest run",
     "e2e": "playwright test",
-    "e2e:docker": "playwright test --config playwright.docker.config.ts"
+    "e2e:ci": "playwright test --config playwright.ci.config.ts",
+    "e2e:docker": "playwright test --config playwright.docker.config.ts",
+    "e2e:restart": "playwright test --config playwright.restart.config.ts"
   },
   "dependencies": {
     "next": "16.3.0",

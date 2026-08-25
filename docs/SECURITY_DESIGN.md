@@ -287,6 +287,18 @@ policy, and production database roles remain **NOT TESTED**.
 - A deployment CSP, TLS/HSTS, backup encryption, database roles, and production retention policies
   depend on a concrete deployment and remain unimplemented.
 
+### CI trust boundary
+
+Pull-request code runs only in workflows with `contents: read`, empty provider keys, real-provider
+flags disabled, disposable test credentials, and no `pull_request_target`. It cannot access the
+protected manual provider Environment. Caches contain only pip downloads or the pnpm store; they do
+not contain virtualenvs, node_modules, databases, runtime secrets, traces, or environment files.
+
+Failure artifacts are offline Playwright evidence only. Successful performance/reliability/delivery
+JSON is schema-limited and scanned before upload. Workflows never dump the environment, database URL,
+GitHub token, or provider payload. Project-scoped cleanup never invokes a global Docker prune. This
+boundary protects CI credentials and neighboring runner resources; it is not application Auth/RBAC.
+
 ## 21. Future authentication, RBAC, and multi-tenant work
 
 Before any shared deployment, add authenticated identities, tenant IDs to every repository key and

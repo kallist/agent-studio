@@ -75,6 +75,7 @@ async def test_tool_executor_enforces_permissions() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.reliability
 async def test_tool_executor_enforces_timeout() -> None:
     async def handler(payload: BaseModel) -> OutputModel:
         del payload

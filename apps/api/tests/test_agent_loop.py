@@ -170,6 +170,7 @@ async def test_malformed_output_terminates_without_regex_parsing() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.reliability
 async def test_invalid_output_retry_is_limited_and_can_recover() -> None:
     provider = ScriptedProvider(
         [
@@ -209,6 +210,7 @@ async def test_max_steps_terminates_after_exact_limit() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.reliability
 async def test_cancellation_interrupts_an_in_flight_provider_call() -> None:
     started = asyncio.Event()
 
@@ -233,6 +235,7 @@ async def test_cancellation_interrupts_an_in_flight_provider_call() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.reliability
 async def test_total_timeout_interrupts_provider() -> None:
     cancelled = asyncio.Event()
 
