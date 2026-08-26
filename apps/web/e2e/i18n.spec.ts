@@ -109,10 +109,10 @@ test("switches all major Studio surfaces to Simplified Chinese and persists acro
   await expect(page.getByRole("heading", { name: "已记住的事实" })).toBeVisible();
 
   await page.getByRole("button", { name: "评测", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "评测" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "评测", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "运行详情", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "运行详情" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运行详情", exact: true })).toBeVisible();
   await expect(page.getByText("运行 ID（Run ID）", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "全部" })).toBeVisible();
   await expect(page.getByText("5192", { exact: true }).first()).toBeVisible();
