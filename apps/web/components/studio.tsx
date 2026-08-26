@@ -14,11 +14,13 @@ import { RunDetail } from "@/components/run-detail";
 import { ConfirmDialog, ErrorBanner, ToastRegion } from "@/components/ui";
 import { AgentDefinition, AgentEvent, api, ApiConnectionStatus, DashboardObservability, KnowledgeBase, MemoryRecord, ProviderCatalogReadiness, reportApiConnection, RunObservability, RunResult, subscribeApiConnection } from "@/lib/api";
 import type { RunSnapshot, StudioView, ToastMessage } from "@/lib/studio-types";
+import { useI18n } from "@/i18n/provider";
 
 const defaultInput = "Calculate 128 * 37 + 456";
 const views: StudioView[] = ["dashboard", "agents", "builder", "playground", "evaluations", "run"];
 
 export function Studio() {
+  const { t } = useI18n();
   const [view, setView] = useState<StudioView>("dashboard");
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
@@ -55,22 +57,22 @@ export function Studio() {
   }, []);
 
   const rememberRun = useCallback((summary: RunObservability, fallbackName?: string) => {
-    const agentName = agentsRef.current.find((agent) => agent.id === summary.agent_id)?.name ?? fallbackName ?? "Unknown agent";
+    const agentName = agentsRef.current.find((agent) => agent.id === summary.agent_id)?.name ?? fallbackName ?? t("agents.unknown");
     const snapshot: RunSnapshot = { ...summary, agentName };
     setHistory((current) => {
       return [snapshot, ...current.filter((item) => item.run_id !== snapshot.run_id)].slice(0, 30);
     });
-  }, []);
+  }, [t]);
 
   const refreshDashboard = useCallback(async () => {
     const data = await api.getDashboardObservability();
     setTelemetry(data);
     setHistory(data.recent_runs.map((summary) => ({
       ...summary,
-      agentName: agentsRef.current.find((agent) => agent.id === summary.agent_id)?.name ?? "Unknown agent",
+      agentName: agentsRef.current.find((agent) => agent.id === summary.agent_id)?.name ?? t("agents.unknown"),
     })));
     return data;
-  }, []);
+  }, [t]);
 
   const updateLocation = useCallback((nextView: StudioView, agentId?: string | null, runId?: string | null) => {
     const params = new URLSearchParams({ view: nextView });
@@ -83,9 +85,9 @@ export function Studio() {
     setMemoryLoading(true);
     setMemoryError(null);
     try { setMemories(await api.listMemories(agentId)); }
-    catch (reason) { setMemoryError(reason instanceof Error ? reason.message : "Durable memory could not be loaded."); }
+    catch (reason) { setMemoryError(reason instanceof Error ? reason.message : t("studioErrors.memoryLoad")); }
     finally { setMemoryLoading(false); }
-  }, []);
+  }, [t]);
 
   const refreshRunState = useCallback(async (runId: string, notify = false) => {
     const [latestRun, latestEvents, latestObservability] = await Promise.all([api.getRun(runId), api.listEvents(runId), api.getRunObservability(runId)]);
@@ -96,12 +98,12 @@ export function Studio() {
     if (["completed", "failed", "cancelled"].includes(latestRun.status)) void refreshDashboard();
     await loadMemories(latestRun.agent_id);
     if (notify) {
-      if (latestRun.status === "completed") showToast("success", "Run completed", `${latestEvents.length} trace events were persisted.`);
-      if (latestRun.status === "failed") showToast("error", "Run failed", latestRun.error ?? "The runtime returned an error.");
-      if (latestRun.status === "cancelled") showToast("info", "Run cancelled", "The persisted trace remains available.");
+      if (latestRun.status === "completed") showToast("success", t("notifications.runCompletedTitle"), t("notifications.runCompletedMessage", { count: latestEvents.length }));
+      if (latestRun.status === "failed") showToast("error", t("notifications.runFailedTitle"), latestRun.error ?? t("notifications.runFailedMessage"));
+      if (latestRun.status === "cancelled") showToast("info", t("notifications.runCancelledTitle"), t("notifications.runCancelledMessage"));
     }
     return latestRun;
-  }, [loadMemories, refreshDashboard, rememberRun, showToast]);
+  }, [loadMemories, refreshDashboard, rememberRun, showToast, t]);
 
   const startStream = useCallback((runId: string, afterSequence = 0) => {
     streamRef.current?.close();
@@ -111,11 +113,11 @@ export function Studio() {
     const onEvent = (message: MessageEvent<string>) => {
       let event: AgentEvent;
       try { event = JSON.parse(message.data) as AgentEvent; }
-      catch { setError("A malformed trace event was ignored. Refresh the run to load persisted events."); return; }
+      catch { setError(t("studioErrors.malformedEvent")); return; }
       setEvents((current) => current.some((item) => item.event_id === event.event_id) ? current : [...current, event].sort((a, b) => a.sequence - b.sequence));
       if (["run.completed", "run.failed", "run.cancelled"].includes(event.type)) {
         source.close();
-        void refreshRunState(runId, true).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Could not refresh the run state."));
+        void refreshRunState(runId, true).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t("studioErrors.refreshRun")));
       }
     };
     source.addEventListener("agent.event", onEvent as EventListener);
@@ -123,10 +125,10 @@ export function Studio() {
       reportApiConnection("offline");
       source.close();
       void refreshRunState(runId).then((latestRun) => {
-        if (!["completed", "failed", "cancelled"].includes(latestRun.status)) setError("The live trace connection was interrupted. Received events were preserved; retry when the API is available.");
-      }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Could not recover the run state."));
+        if (!["completed", "failed", "cancelled"].includes(latestRun.status)) setError(t("studioErrors.streamInterrupted"));
+      }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t("studioErrors.recoverRun")));
     };
-  }, [refreshRunState]);
+  }, [refreshRunState, t]);
 
   const loadAgents = useCallback(async () => {
     setLoading(true); setError(null);
@@ -135,16 +137,16 @@ export function Studio() {
       setAgents(loadedAgents); agentsRef.current = loadedAgents;
       setSelectedId((current) => loadedAgents.some((agent) => agent.id === current) ? current : loadedAgents[0]?.id ?? null);
       return loadedAgents;
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Agent definitions could not be loaded."); return []; }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : t("studioErrors.agentsLoad")); return []; }
     finally { setLoading(false); }
-  }, []);
+  }, [t]);
 
   const loadKnowledgeBases = useCallback(async () => {
     setKnowledgeLoading(true); setKnowledgeError(null);
     try { const loaded = await api.listKnowledgeBases(); setKnowledgeBases(loaded); return loaded; }
-    catch (reason) { setKnowledgeError(reason instanceof Error ? reason.message : "Knowledge Bases could not be loaded."); return []; }
+    catch (reason) { setKnowledgeError(reason instanceof Error ? reason.message : t("studioErrors.knowledgeLoad")); return []; }
     finally { setKnowledgeLoading(false); }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     let active = true;
@@ -173,12 +175,12 @@ export function Studio() {
           setRun(loadedRun); setEvents(loadedEvents); setObservability(loadedObservability); setInput(loadedRun.input); setSelectedId(loadedRun.agent_id);
           if (loadedRun.run_kind === "normal") rememberRun(loadedObservability, initialAgent?.name);
           if (["pending", "running"].includes(loadedRun.status)) startStream(runId, loadedEvents.at(-1)?.sequence ?? 0);
-        } catch (reason) { if (active) setError(reason instanceof Error ? reason.message : "The requested run could not be loaded."); }
+        } catch (reason) { if (active) setError(reason instanceof Error ? reason.message : t("studioErrors.requestedRun")); }
       }
     }
     void load();
     return () => { active = false; streamRef.current?.close(); };
-  }, [loadAgents, loadKnowledgeBases, loadMemories, refreshDashboard, rememberRun, startStream]);
+  }, [loadAgents, loadKnowledgeBases, loadMemories, refreshDashboard, rememberRun, startStream, t]);
 
   const inspectRunId = useCallback(async (runId: string, fallbackName?: string) => {
     setError(null); setSubmitting(true);
@@ -187,9 +189,9 @@ export function Studio() {
       setRun(loadedRun); setEvents(loadedEvents); setObservability(loadedObservability); setInput(loadedRun.input); setSelectedId(loadedRun.agent_id); setView("run");
       updateLocation("run", loadedRun.agent_id, loadedRun.id);
       if (loadedRun.run_kind === "normal") rememberRun(loadedObservability, fallbackName);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "The selected run could not be loaded."); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : t("studioErrors.selectedRun")); }
     finally { setSubmitting(false); }
-  }, [rememberRun, updateLocation]);
+  }, [rememberRun, t, updateLocation]);
 
   const inspectRun = useCallback(async (snapshot: RunSnapshot) => {
     await inspectRunId(snapshot.run_id, snapshot.agentName);
@@ -211,8 +213,8 @@ export function Studio() {
     try {
       const created = await api.createAgent(payload);
       setAgents((current) => [created, ...current]); setSelectedId(created.id); setRun(null); setEvents([]); setObservability(null); setMemories([]); setView("playground");
-      updateLocation("playground", created.id); showToast("success", "Agent saved", `${created.name} is ready in the Playground.`); return created;
-    } catch (reason) { const message = reason instanceof Error ? reason.message : "The agent definition could not be saved."; setError(message); showToast("error", "Save failed", message); return null; }
+      updateLocation("playground", created.id); showToast("success", t("notifications.agentSavedTitle"), t("notifications.agentSavedMessage", { name: created.name })); return created;
+    } catch (reason) { const message = reason instanceof Error ? reason.message : t("studioErrors.saveAgent"); setError(message); showToast("error", t("notifications.saveFailedTitle"), message); return null; }
     finally { setSubmitting(false); }
   }
 
@@ -222,10 +224,10 @@ export function Studio() {
     setAgents((current) => current.map((agent) => agent.id === selected.id ? { ...agent, memory_enabled: enabled } : agent));
     try {
       await api.setMemoryEnabled(selected.id, enabled);
-      showToast("success", enabled ? "Memory enabled" : "Memory disabled", enabled ? "Future runs may retrieve and write durable facts." : "Future runs will not retrieve or write durable facts.");
+      showToast("success", enabled ? t("notifications.memoryEnabledTitle") : t("notifications.memoryDisabledTitle"), enabled ? t("notifications.memoryEnabledMessage") : t("notifications.memoryDisabledMessage"));
     } catch (reason) {
       setAgents((current) => current.map((agent) => agent.id === selected.id ? { ...agent, memory_enabled: !enabled } : agent));
-      setMemoryError(reason instanceof Error ? reason.message : "Memory settings could not be updated.");
+      setMemoryError(reason instanceof Error ? reason.message : t("studioErrors.memoryUpdate"));
     }
     finally { setMemoryUpdating(false); }
   }
@@ -233,8 +235,8 @@ export function Studio() {
   async function deleteMemory(memoryId: string) {
     if (!selected) return;
     setMemoryUpdating(true); setMemoryError(null);
-    try { await api.deleteMemory(selected.id, memoryId); setMemories((current) => current.filter((memory) => memory.id !== memoryId)); showToast("info", "Memory deleted", "The durable fact was removed from this agent."); }
-    catch (reason) { setMemoryError(reason instanceof Error ? reason.message : "The durable fact could not be deleted."); }
+    try { await api.deleteMemory(selected.id, memoryId); setMemories((current) => current.filter((memory) => memory.id !== memoryId)); showToast("info", t("notifications.memoryDeletedTitle"), t("notifications.memoryDeletedMessage")); }
+    catch (reason) { setMemoryError(reason instanceof Error ? reason.message : t("studioErrors.memoryDelete")); }
     finally { setMemoryUpdating(false); }
   }
 
@@ -242,12 +244,12 @@ export function Studio() {
     event.preventDefault(); if (!selected || !input.trim()) return;
     setSubmitting(true); setError(null); setEvents([]); setRun(null); setObservability(null);
     try { const createdRun = await api.createRun(selected.id, input.trim()); setRun(createdRun); setView("playground"); updateLocation("playground", selected.id, createdRun.id); startStream(createdRun.id); }
-    catch (reason) { const message = reason instanceof Error ? reason.message : "The agent run could not be started."; setError(message); showToast("error", "Run could not start", message); }
+    catch (reason) { const message = reason instanceof Error ? reason.message : t("studioErrors.runStart"); setError(message); showToast("error", t("notifications.runStartFailedTitle"), message); }
     finally { setSubmitting(false); }
   }
 
-  async function cancelRun() { if (!run) return; try { await api.cancelRun(run.id); showToast("info", "Cancellation requested", "The runtime will persist a cancelled terminal event."); } catch (reason) { setError(reason instanceof Error ? reason.message : "The run could not be cancelled."); } }
-  function clearRun() { streamRef.current?.close(); setRun(null); setEvents([]); setObservability(null); setConfirmClear(false); updateLocation("playground", selectedId); showToast("info", "Conversation cleared", "The persisted run is still available from the Dashboard."); }
+  async function cancelRun() { if (!run) return; try { await api.cancelRun(run.id); showToast("info", t("notifications.cancellationTitle"), t("notifications.cancellationMessage")); } catch (reason) { setError(reason instanceof Error ? reason.message : t("studioErrors.runCancel")); } }
+  function clearRun() { streamRef.current?.close(); setRun(null); setEvents([]); setObservability(null); setConfirmClear(false); updateLocation("playground", selectedId); showToast("info", t("notifications.clearedTitle"), t("notifications.clearedMessage")); }
   function rerun() { if (run) setInput(run.input); setRun(null); setEvents([]); setObservability(null); setView("playground"); updateLocation("playground", selectedId); }
 
   return (
@@ -260,7 +262,7 @@ export function Studio() {
       {view === "evaluations" && <EvaluationStudio agents={agents} onViewRun={(runId) => void inspectRunId(runId)} />}
       {view === "run" && <RunDetail run={run} events={events} observability={observability} agent={selected} onBack={() => navigate(run?.run_kind === "evaluation" ? "evaluations" : "playground")} onRerun={rerun} />}
       <ToastRegion toast={toast} onDismiss={() => setToast(null)} />
-      <ConfirmDialog open={confirmClear} title="Clear this conversation?" description="This removes the current conversation from the Playground. The persisted run remains available in recent runs." confirmLabel="Clear conversation" danger onConfirm={clearRun} onCancel={() => setConfirmClear(false)} />
+      <ConfirmDialog open={confirmClear} title={t("playground.clearTitle")} description={t("playground.clearDescription")} confirmLabel={t("playground.clearConfirm")} danger onConfirm={clearRun} onCancel={() => setConfirmClear(false)} />
     </AppShell>
   );
 }

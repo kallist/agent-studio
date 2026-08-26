@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### English / Simplified Chinese UI
+
+- Added a typed, application-owned UI internationalization layer for `en` and `zh-CN`, with English as the default, a global accessible language switcher, cookie persistence, SSR-safe initial locale, localized dates/status display, and automatic dictionary parity tests.
+- Kept Agent prompts, model output, RAG queries and documents, Memory content, Evaluation inputs, provider/model identifiers, API contracts, database enums/schema, and raw RunEvent values locale-independent.
+
 ## v1.0.0
 
 ### Runtime and tools

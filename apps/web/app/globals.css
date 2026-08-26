@@ -143,12 +143,17 @@ button, a, input, textarea, select { outline: none; }
 
 .app-shell { display: grid; grid-template-columns: 238px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { position: sticky; top: 0; height: 100vh; padding: 22px 14px 18px; color: #d9dce5; background: #151821; border-right: 1px solid #242833; display: flex; flex-direction: column; overflow-x: hidden; z-index: 20; }
+.sidebar-header { display: grid; gap: 8px; }
 .wordmark { display: flex; align-items: center; gap: 11px; width: 100%; padding: 3px 8px 22px; border: 0; background: transparent; color: white; text-align: left; }
 .wordmark-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; color: white; background: linear-gradient(145deg, #7568ea, #5a4dc7); box-shadow: 0 8px 20px rgba(101,88,217,.28); }
 .wordmark-icon svg { width: 18px; height: 18px; }
 .wordmark > span:last-child { display: grid; min-width: 0; }
 .wordmark strong { font-size: 14px; letter-spacing: -.01em; }
 .wordmark small { color: #7f8798; font-size: 10px; letter-spacing: .055em; text-transform: uppercase; }
+.language-switcher { min-width: 0; margin: 0 8px 10px; padding: 7px 9px; border: 1px solid #303544; border-radius: 8px; color: #b9c0ce; background: #1b1e28; display: flex; align-items: center; gap: 7px; }
+.language-switcher svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.language-switcher select { width: 100%; min-width: 0; border: 0; color: inherit; background: transparent; cursor: pointer; font-size: 10px; font-weight: 650; }
+.language-switcher select option { color: var(--text); background: white; }
 .primary-nav { display: grid; gap: 4px; }
 .primary-nav > p { margin: 10px 10px 7px; color: #6d7484; font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 .nav-item { width: 100%; min-height: 42px; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 0 11px; border: 0; border-radius: 9px; color: #aeb4c1; background: transparent; text-align: left; transition: color .15s, background .15s; }
@@ -687,6 +692,9 @@ tbody tr:hover { background: #fbfbfd; }
 @media (max-width: 900px) {
   .app-shell { display: block; }
   .sidebar { position: sticky; top: 0; width: 100%; height: auto; padding: 10px 14px 0; border-right: 0; border-bottom: 1px solid #282c36; }
+  .sidebar-header { display: flex; align-items: center; gap: 10px; }
+  .sidebar-header .wordmark { min-width: 0; flex: 1 1 auto; padding-bottom: 10px; }
+  .sidebar-header .language-switcher { width: 116px; flex: 0 0 116px; margin: 0 0 10px; }
   .wordmark { width: auto; padding: 0 4px 9px; }
   .wordmark-icon { width: 30px; height: 30px; }
   .wordmark small, .sidebar-footer { display: none; }

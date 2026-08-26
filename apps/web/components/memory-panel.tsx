@@ -1,4 +1,5 @@
 import type { MemoryRecord } from "@/lib/api";
+import { useI18n } from "@/i18n/provider";
 
 interface MemoryPanelProps {
   enabled: boolean;
@@ -19,12 +20,13 @@ export function MemoryPanel({
   onDelete,
   onToggle,
 }: MemoryPanelProps) {
+  const { formatDate, t } = useI18n();
   return (
     <section className="memory-section" aria-labelledby="memory-heading">
       <div className="memory-heading-row">
         <div>
-          <p className="eyebrow">LONG-TERM MEMORY</p>
-          <h3 id="memory-heading">Remembered facts</h3>
+          <p className="eyebrow">{t("memory.eyebrow")}</p>
+          <h3 id="memory-heading">{t("memory.title")}</h3>
         </div>
         <label className="memory-toggle">
           <input
@@ -33,18 +35,18 @@ export function MemoryPanel({
             onChange={(event) => onToggle(event.target.checked)}
             disabled={updating}
           />
-          <span>{updating ? "Updating…" : enabled ? "On" : "Off"}</span>
+          <span>{updating ? t("memory.updating") : enabled ? t("memory.on") : t("memory.off")}</span>
         </label>
       </div>
       {!enabled && (
-        <p className="memory-note">Memory is off. Runs will not retrieve or write facts.</p>
+        <p className="memory-note">{t("memory.disabledNote")}</p>
       )}
       {error ? (
         <p className="memory-note memory-error" role="alert">{error}</p>
       ) : loading ? (
-        <div className="memory-skeleton" aria-label="Loading durable memory"><span /><span /></div>
+        <div className="memory-skeleton" aria-label={t("common.loading.memory")}><span /><span /></div>
       ) : memories.length === 0 ? (
-        <p className="memory-note">No durable facts saved for this agent.</p>
+        <p className="memory-note">{t("memory.empty")}</p>
       ) : (
         <ul className="memory-list">
           {memories.map((memory) => (
@@ -52,7 +54,7 @@ export function MemoryPanel({
               <div>
                 <p>{memory.content}</p>
                 <small>
-                  Importance {memory.importance.toFixed(1)} · expires {formatDate(memory.expires_at)}
+                  {t("memory.factMeta", { importance: memory.importance.toFixed(1), expires: memory.expires_at ? formatDate(memory.expires_at, { dateStyle: "medium" }) : t("common.values.never") })}
                 </small>
               </div>
               <button
@@ -60,9 +62,9 @@ export function MemoryPanel({
                 className="memory-delete"
                 onClick={() => onDelete(memory.id)}
                 disabled={updating}
-                aria-label={`Delete memory: ${memory.content}`}
+                aria-label={t("memory.deleteAria", { content: memory.content })}
               >
-                Delete
+                {t("common.actions.delete")}
               </button>
             </li>
           ))}
@@ -70,9 +72,4 @@ export function MemoryPanel({
       )}
     </section>
   );
-}
-
-function formatDate(value: string | null): string {
-  if (!value) return "never";
-  return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(value));
 }
