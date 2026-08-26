@@ -67,10 +67,10 @@ jobs:
     timeout-minutes: 25
     env:
       POSTGRES_TEST_ALLOW_DESTRUCTIVE_RESET: I_UNDERSTAND_THIS_DROPS_TEST_TABLES
-      POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://agent_studio_test:task13-ci-only@127.0.0.1:55432/agent_studio_test
+      POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://agent_studio_test:v1-ci-only@127.0.0.1:55432/agent_studio_test
       POSTGRES_NO_VECTOR_TEST_DATABASE_URL: postgresql+asyncpg://agent_studio_limited_test:not-a-secret-test-only@127.0.0.1:55432/agent_studio_no_vector_test
-      POSTGRES_TEST_PASSWORD: task13-ci-only
-      TASK13_PG_PROJECT: agent-studio-task13-pg-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_TEST_PASSWORD: v1-ci-only
+      CI_PG_PROJECT: agent-studio-v1-pg-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -86,7 +86,7 @@ jobs:
       - name: Start disposable PostgreSQL 17 and pgvector 0.8.6
         run: |
           set -euo pipefail
-          docker compose --project-name "$TASK13_PG_PROJECT" -f compose.postgres-test.yaml up -d --wait --wait-timeout 120
+          docker compose --project-name "$CI_PG_PROJECT" -f compose.postgres-test.yaml up -d --wait --wait-timeout 120
       - name: Real PostgreSQL and pgvector integration
         run: |
           .venv/bin/pytest apps/api/tests/postgres -m "postgresql and not performance and not real_openai and not real_deepseek" -q
@@ -97,7 +97,7 @@ jobs:
           echo "PostgreSQL 17, pgvector extension/vector(256)/HNSW, RAG, Memory locking, Evaluation, Observability, and Security integration executed." >> "$GITHUB_STEP_SUMMARY"
       - name: Cleanup disposable PostgreSQL
         if: always()
-        run: docker compose --project-name "$TASK13_PG_PROJECT" -f compose.postgres-test.yaml down --volumes --remove-orphans
+        run: docker compose --project-name "$CI_PG_PROJECT" -f compose.postgres-test.yaml down --volumes --remove-orphans
 
   frontend:
     name: Frontend
@@ -187,8 +187,8 @@ jobs:
           docker compose build api web
       - name: Validate production image users
         run: |
-          test "$(docker image inspect agent-studio-api:task12 --format '{{.Config.User}}')" = "10001:10001"
-          test "$(docker image inspect agent-studio-web:task12 --format '{{.Config.User}}')" = "10001:10001"
+          test "$(docker image inspect agent-studio-api:v1-local --format '{{.Config.User}}')" = "10001:10001"
+          test "$(docker image inspect agent-studio-web:v1-local --format '{{.Config.User}}')" = "10001:10001"
       - name: Docker summary
         if: always()
         run: |
@@ -225,7 +225,7 @@ jobs:
       - name: Container restart, recovery, and persistence validation
         run: |
           .venv/bin/python scripts/ci/docker_reliability.py \
-            --project-name "agent-studio-task13-reliability-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --project-name "agent-studio-v1-reliability-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --browser-check \
             --artifact .artifacts/reliability-metadata.json
           .venv/bin/python scripts/ci/validate_repository.py .artifacts/reliability-metadata.json
@@ -259,10 +259,10 @@ jobs:
     env:
       PERFORMANCE_OUTPUT: .artifacts/performance-summary.json
       POSTGRES_TEST_ALLOW_DESTRUCTIVE_RESET: I_UNDERSTAND_THIS_DROPS_TEST_TABLES
-      POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://agent_studio_test:task13-perf-only@127.0.0.1:55432/agent_studio_test
+      POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://agent_studio_test:v1-perf-only@127.0.0.1:55432/agent_studio_test
       POSTGRES_NO_VECTOR_TEST_DATABASE_URL: postgresql+asyncpg://agent_studio_limited_test:not-a-secret-test-only@127.0.0.1:55432/agent_studio_no_vector_test
-      POSTGRES_TEST_PASSWORD: task13-perf-only
-      TASK13_PERF_PROJECT: agent-studio-task13-perf-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_TEST_PASSWORD: v1-perf-only
+      CI_PERF_PROJECT: agent-studio-v1-perf-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -276,7 +276,7 @@ jobs:
           .venv/bin/python -m pip install -e './apps/api[dev]'
       - name: Start benchmark PostgreSQL
         run: |
-          docker compose --project-name "$TASK13_PERF_PROJECT" -f compose.postgres-test.yaml up -d --wait --wait-timeout 120
+          docker compose --project-name "$CI_PERF_PROJECT" -f compose.postgres-test.yaml up -d --wait --wait-timeout 120
       - name: Deterministic performance baseline
         run: .venv/bin/pytest apps/api/tests/postgres/test_performance_baseline.py -m performance -q -s
       - name: Validate and summarize performance evidence
@@ -305,4 +305,4 @@ jobs:
           retention-days: 7
       - name: Cleanup benchmark PostgreSQL
         if: always()
-        run: docker compose --project-name "$TASK13_PERF_PROJECT" -f compose.postgres-test.yaml down --volumes --remove-orphans
+        run: docker compose --project-name "$CI_PERF_PROJECT" -f compose.postgres-test.yaml down --volumes --remove-orphans

@@ -14,7 +14,7 @@ test("reconnects the real UI to persisted data after Web restart", async ({ page
   await page.getByRole("button", { name: "Agents", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
   await expect(
-    page.getByText("Task 13 Reliability Calculator", { exact: true })
+    page.getByText("V1 Reliability Calculator", { exact: true })
   ).toBeVisible();
 
   expect(pageErrors).toEqual([]);

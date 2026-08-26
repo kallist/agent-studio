@@ -27,7 +27,7 @@ identity. API keys, base URL credentials, SDK objects, raw chunks, and raw provi
 never persisted or returned to the frontend.
 
 DeepSeek now documents a Responses-compatible endpoint for some models, but this implementation
-deliberately validates the broader official Chat Completions path required by Task 11. It does not
+deliberately validates the broader official Chat Completions path selected for v1. It does not
 send `previous_response_id`, `conversation_id`, hosted tools, `store`, `truncation`, or other
 Responses-only settings to DeepSeek. DeepSeek thinking is explicitly disabled in its adapter for
 this bounded v1 path instead of mechanically mapping OpenAI reasoning settings.
@@ -104,7 +104,7 @@ The default `compose.yaml` starts the deterministic Mock demo without mounting a
 initializer, then `compose.deepseek.yaml` mounts that project-scoped provider volume only into API
 and requires provider configuration during startup. Missing key material fails clearly and cannot
 fall back to Mock. `compose.openai.yaml` implements the equivalent `OPENAI_API_KEY_FILE` path.
-DeepSeek's provider behavior was validated in Task 11; a current container smoke must be reported
+DeepSeek's provider behavior has real online validation; a current container smoke must be reported
 separately. Real OpenAI container validation remains **NOT TESTED**.
 
 Official references used for this boundary:

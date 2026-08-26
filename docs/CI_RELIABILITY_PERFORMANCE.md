@@ -2,7 +2,7 @@
 
 ## 1. Goals
 
-Task 13 makes the existing product quality contract repeatable on GitHub-hosted runners. It adds
+The v1 workflows make the product quality contract repeatable on GitHub-hosted runners. They add
 offline-by-default pull-request gates, real PostgreSQL/pgvector integration, production image and
 runtime checks, bounded reliability scenarios, a synthetic performance baseline, and delivery-ready
 evidence. It does not deploy to the internet or publish an image.
@@ -44,9 +44,9 @@ and remains manually dispatchable after the workflow exists on the default branc
 
 ## 5. PostgreSQL CI
 
-CI reuses `compose.postgres-test.yaml`, `infra/postgres-test-init.sql`, and the Task 10 pytest
+CI reuses `compose.postgres-test.yaml`, `infra/postgres-test-init.sql`, and the guarded PostgreSQL pytest
 fixtures instead of inventing another database topology. The service is loopback-only, tmpfs-backed,
-and named with an `agent-studio-task13-*` project. Reset still requires the exact confirmation and
+and named with an `agent-studio-v1-*` project. Reset still requires the exact confirmation and
 accepts only loopback `postgresql+asyncpg` URLs whose database and role end in `_test`.
 
 Tests inspect the real vector extension, `vector(256)` column, HNSW index, completed-only RAG,
@@ -56,7 +56,7 @@ Observability, redaction, and unavailable-database failure. Real-provider tests 
 ## 6. Frontend CI
 
 The lockfile is authoritative. CI never uses `--no-frozen-lockfile` and caches only the pnpm store.
-The production build explicitly uses webpack, matching the Task 12 Docker image.
+The production build explicitly uses webpack, matching the Docker image build.
 
 ## 7. Playwright
 
@@ -76,7 +76,7 @@ virtualenv, source bind mount, or developer database participates in the build.
 ## 9. Continuous delivery definition
 
 `DELIVERY READY` means the SHA's production images built and its disposable Compose runtime passed
-the documented smoke and E2E checks. It does not mean deployed. Task 13 does not push Docker Hub,
+the documented smoke and E2E checks. It does not mean deployed. The workflow does not push Docker Hub,
 GHCR, a private registry, a release, or any cloud/public target.
 
 The delivery artifact contains only git SHA, UTC timestamp, image identities, safe result names,
@@ -94,7 +94,7 @@ data is removed after the job.
 `provider-live.yml` is manual-only, binds the protected `provider-live-validation` Environment,
 requires its DeepSeek secret, and runs only the explicit billable DeepSeek suite. It is not a merge
 gate. No ordinary pull request or main workflow references that secret. Real OpenAI remains outside
-Task 13 validation.
+the live validation gate.
 
 ## 12. Reliability model
 
@@ -106,7 +106,7 @@ its subscriber finalizer runs while the underlying Run remains readable and canc
 
 ## 13. Failure injection
 
-`scripts/ci/docker_reliability.py` operates only a validated `agent-studio-task13-*` Compose project.
+`scripts/ci/docker_reliability.py` operates only a validated `agent-studio-v1-*` Compose project.
 It stops/restarts only that project's DB/API/Web services. It never uses iptables, daemon kill,
 host reboot, global process kill, or a global Docker prune. A `finally` path removes only project
 containers, networks, and volumes. A cleanup failure fails the validation and removes any
@@ -188,7 +188,7 @@ waits are at most five minutes. There is no unbounded retry loop.
 
 ## 23. Branch protection recommendations
 
-After Task 13 is accepted, configure these exact required checks on main: `Backend`, `PostgreSQL`,
+Configure these exact required checks on main: `Backend`, `PostgreSQL`,
 `Frontend`, `Playwright`, `Docker`, `Reliability`, and `Performance`. Repository settings are not
 changed by this task. Delivery runs after main and is evidence for delivery readiness, not a PR
 approval substitute.
@@ -234,7 +234,7 @@ pnpm --dir apps/web e2e
 
 # Production-like project-scoped reliability/delivery evidence
 .\.venv\Scripts\python.exe scripts/ci/docker_reliability.py `
-  --project-name agent-studio-task13-local `
+  --project-name agent-studio-v1-local `
   --artifact .artifacts/delivery-metadata.json
 ```
 

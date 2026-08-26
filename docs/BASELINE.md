@@ -1,5 +1,7 @@
 # Engineering baseline
 
+> Historical repository-start snapshot. It does not describe the current v1 product; see [V1_STATUS.md](V1_STATUS.md) for current implementation and validation claims.
+
 Recorded: 2026-08-13 (Asia/Shanghai)
 
 This document records verified facts, not planned behavior. Planned architecture and commands live in `ARCHITECTURE.md` and `DEVELOPMENT.md`.

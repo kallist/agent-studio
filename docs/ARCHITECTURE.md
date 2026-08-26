@@ -2,7 +2,7 @@
 
 ## Goals
 
-The first version should make a real agent run observable from definition through evaluation without turning the repository into a framework or a set of premature microservices. The web and API applications are separate deployable boundaries; backend modules remain a modular monolith until scaling or ownership evidence justifies extraction.
+Version 1 makes a real Agent Run observable from definition through Evaluation without turning the repository into a framework or a set of premature microservices. The Web and API applications are separate deployable boundaries; backend modules remain a modular monolith until scaling or ownership evidence justifies extraction.
 
 ## System context
 
@@ -23,7 +23,7 @@ Agent Runtime
 PostgreSQL / pgvector
 ```
 
-The frontend never calls an LLM provider or a tool directly. FastAPI owns authentication and API contracts. `AgentService` coordinates application workflows. `AgentRuntime` executes a run behind a stable port. Persistence and retrieval are accessed through repositories/stores rather than ORM sessions in business code.
+The frontend never calls an LLM provider or a tool directly. FastAPI owns API contracts and is the future authentication boundary; authentication is not implemented in v1. `AgentService` coordinates application workflows. `AgentRuntime` executes a run behind a stable port. Persistence and retrieval are accessed through repositories/stores rather than ORM sessions in business code.
 
 ## Recommended repository structure
 
@@ -45,7 +45,7 @@ This keeps worktree changes easy to isolate by application without introducing a
 
 ## Backend boundaries
 
-The eventual `apps/api` package should be organized by responsibility, not by transport:
+The `apps/api` package is organized by responsibility, not by transport:
 
 ```text
 app/
@@ -70,7 +70,7 @@ Application-level coordinator. It validates requests, loads an agent definition,
 
 ### AgentRuntime
 
-Port for executing or resuming an agent run. Its inputs and emitted events are application types. The initial production adapter is `AgentsSdkRuntime`; deterministic tests use a fake/runtime fixture. SDK result objects do not cross this boundary.
+Port for executing an Agent Run. Its inputs and emitted events are application types. The real-provider adapter is `AgentsSdkRuntime`; deterministic tests and the default demo use `MockRuntime`. SDK result objects do not cross this boundary. Normal Agent Runs are not resumed after process restart; non-terminal persisted Runs are finalized with an explicit restart failure.
 
 ### LLMProvider
 

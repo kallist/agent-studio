@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline_kind": "reviewed-engineering-baseline",
-  "baseline_source": "Task 13 initial local PostgreSQL 17 and pgvector 0.8.6 run",
+  "baseline_source": "Initial v1 local PostgreSQL 17 and pgvector 0.8.6 run",
   "baseline_runtime": {
     "source_git_sha": "a65c429013c0baad7c8bd8a0538e83c5531531be",
     "python": "3.12.13",

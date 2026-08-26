@@ -7,7 +7,7 @@ deterministic Mock Runtime plus PostgreSQL/pgvector and requires no LLM API key.
 
 ## 2. Scope
 
-Task 12 containerizes the existing Next.js web app, FastAPI modular monolith, PostgreSQL 17/pgvector,
+The v1 runtime containerizes the Next.js web app, FastAPI modular monolith, PostgreSQL 17/pgvector,
 RAG files, local ingestion/evaluation workers, and application health lifecycle. It adds no Agent,
 tool, RAG, Memory, Evaluation, or Observability product capability.
 
@@ -152,7 +152,7 @@ must not be logged.
 
 App containers drop all Linux capabilities, deny privilege escalation, use read-only root filesystems
 and bounded `/tmp` tmpfs, mount only required volumes, and have no privileged mode, host networking,
-source bind mount, or Docker socket. Existing Task 09 application controls remain authoritative.
+source bind mount, or Docker socket. The application controls in `SECURITY_DESIGN.md` remain authoritative.
 
 ## 24. Non-root containers
 
@@ -212,7 +212,7 @@ stop/start persistence testing, not a physical Windows reboot.
 
 ## 31. Future deployment work
 
-Task 13 adds CI/CD foundations, bounded restart/failure testing, and a synthetic engineering
+The CI/CD workflows add bounded restart/failure testing and a synthetic engineering
 performance baseline as documented in `CI_RELIABILITY_PERFORMANCE.md`. Image publication/signing,
 backup verification, and internet-service architecture still require separate
 Auth/tenancy/ingress/managed-infrastructure decisions.

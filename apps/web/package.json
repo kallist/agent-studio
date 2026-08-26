@@ -1,6 +1,6 @@
 {
   "name": "agent-studio-web",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "private": true,
   "scripts": {
@@ -14,7 +14,8 @@
     "e2e": "playwright test",
     "e2e:ci": "playwright test --config playwright.ci.config.ts",
     "e2e:docker": "playwright test --config playwright.docker.config.ts",
-    "e2e:restart": "playwright test --config playwright.restart.config.ts"
+    "e2e:restart": "playwright test --config playwright.restart.config.ts",
+    "screenshots:v1": "node scripts/capture-v1-screenshots.mjs"
   },
   "dependencies": {
     "next": "16.3.0",

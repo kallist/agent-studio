@@ -43,7 +43,7 @@ It cannot execute Python, shell, SQL, regular expressions, imports, or file path
 ## 5. Grader contract
 
 `DeterministicGrader.grade(config, context)` receives one already-loaded context containing the
-persisted `Run`, ordered `RunEvent` list, and Task 07 `RunObservability`. It returns:
+persisted `Run`, ordered `RunEvent` list, and `RunObservability`. It returns:
 
 - grader type and whether it is required;
 - outcome `pass`, `fail`, or `error`;
@@ -64,7 +64,7 @@ No grader calls a model or performs its own database query.
 - `retrieval_hit`: reads real `knowledge_search` result provenance.
 - `citation`: verifies citation presence and optional source/document identity from provenance.
 - `memory_retrieved`: requires a positive real `memory.retrieved` event.
-- `max_steps`: compares Task 07 `step_count` with an inclusive maximum.
+- `max_steps`: compares the persisted `step_count` with an inclusive maximum.
 - `max_duration`: compares measured `duration_ms` with an inclusive maximum; unavailable duration
   is a grader `error`, never PASS.
 
@@ -180,7 +180,7 @@ evidence from the real Run.
 
 Evaluation Runs execute through `AgentService` and the same bounded runtime. They retain complete
 RunEvent persistence, tool call IDs, step indices, latency, redaction, generic SSE support, and
-Task 07 Observability. Graders load Run, Events, and Observability once per Case, preventing one
+persisted Run observability. Graders load Run, Events, and Observability once per Case, preventing one
 database scan per grader.
 
 ## 18. Dashboard isolation
@@ -194,7 +194,7 @@ an Evaluation trace also does not add it to the frontend's normal recent-run cac
 
 All schemas enforce length/count bounds and typed fields. There is no executable grader or setup
 payload. Idempotency keys use a small character allowlist. Evaluation reasons, expected/actual
-values, and evidence pass through Task 07 recursive redaction before persistence. Exceptions shown
+values, and evidence pass through recursive redaction before persistence. Exceptions shown
 to a Case result are bounded by category; Python tracebacks stay in server logs.
 
 Inputs, expected values, RAG content, and Memory content remain untrusted data. Evaluation does not

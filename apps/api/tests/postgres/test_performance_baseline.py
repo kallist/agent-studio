@@ -206,7 +206,7 @@ async def test_deterministic_postgresql_performance_baseline(
 
     corpus_paragraphs = [
         (
-            f"Task13 synthetic paragraph {index} reliability retrieval marker-{index}. "
+            f"v1 synthetic paragraph {index} reliability retrieval marker-{index}. "
             + "bounded deterministic pgvector baseline content " * 28
         )
         for index in range(120)
@@ -214,14 +214,14 @@ async def test_deterministic_postgresql_performance_baseline(
     corpus = "\n\n".join(corpus_paragraphs).encode()
     base_response = await client.post(
         "/knowledge-bases",
-        json={"name": "Performance Corpus", "description": "Synthetic Task 13 data"},
+        json={"name": "Performance Corpus", "description": "Synthetic v1 data"},
     )
     assert base_response.status_code == 201
     knowledge_base_id = base_response.json()["id"]
     ingest_started = perf_counter()
     upload = await client.post(
         f"/knowledge-bases/{knowledge_base_id}/documents",
-        files={"file": ("task13-performance.md", corpus, "text/markdown")},
+        files={"file": ("v1-performance.md", corpus, "text/markdown")},
     )
     assert upload.status_code == 202
     ingestion = await _wait_for_ingestion(
@@ -274,9 +274,9 @@ async def test_deterministic_postgresql_performance_baseline(
                     id=str(uuid4()),
                     agent_id=str(memory_agent_id),
                     kind="long_term",
-                    content=f"Project codename Task13 memory fact {index}",
+                    content=f"Project codename v1 memory fact {index}",
                     normalized_key=normalized_memory_key(
-                        f"Project codename Task13 memory fact {index}"
+                        f"Project codename v1 memory fact {index}"
                     ),
                     importance=0.7,
                     created_at=now - timedelta(minutes=index),
@@ -291,7 +291,7 @@ async def test_deterministic_postgresql_performance_baseline(
     memory_samples: list[float] = []
     for _ in range(20):
         matches, elapsed_ms = await _timed(
-            retriever.retrieve(memory_agent_id, "What is the Task13 project codename?")
+            retriever.retrieve(memory_agent_id, "What is the v1 project codename?")
         )
         assert matches
         memory_samples.append(elapsed_ms)
@@ -325,7 +325,7 @@ async def test_deterministic_postgresql_performance_baseline(
     suite_response = await client.post(
         "/evaluation-suites",
         json={
-            "name": "Task 13 Performance Evaluation",
+            "name": "V1 Performance Evaluation",
             "agent_id": calculator_agent_id,
             "cases": cases,
         },
@@ -334,7 +334,7 @@ async def test_deterministic_postgresql_performance_baseline(
     evaluation_started = perf_counter()
     evaluation_response = await client.post(
         f"/evaluation-suites/{suite_response.json()['id']}/runs",
-        headers={"Idempotency-Key": "task13-performance-evaluation"},
+        headers={"Idempotency-Key": "v1-performance-evaluation"},
     )
     assert evaluation_response.status_code == 202
     evaluation = await _wait_for_evaluation(client, evaluation_response.json()["id"])
