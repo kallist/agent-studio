@@ -169,7 +169,7 @@ test("ingests knowledge, binds it to an agent, and preserves cited run metadata"
   const fixture = path.resolve(process.cwd(), "../../tests/fixtures/rag/security_policy.txt");
   await page.locator('input[type="file"]').setInputFiles(fixture);
   await page.getByRole("button", { name: "Upload & ingest" }).click();
-  await expect(page.getByText("completed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
 
   await page.getByLabel("Test retrieval").fill("How are path traversal and parser failures handled?");
   await page.getByRole("button", { name: "Semantic + keyword search" }).click();
@@ -212,7 +212,7 @@ test("combines durable memory with knowledge search across deterministic runs", 
   await expect(page.getByRole("button", { name: new RegExp(baseName) })).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles(path.resolve(process.cwd(), "../../tests/fixtures/rag/security_policy.txt"));
   await page.getByRole("button", { name: "Upload & ingest" }).click();
-  await expect(page.getByText("completed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
 
   await page.getByRole("checkbox", { name: new RegExp(baseName) }).check();
   await expect(page.getByLabel("Enable Durable Memory")).toBeChecked();
@@ -321,9 +321,14 @@ test("observes failed and cancelled runs as distinct terminal states", async ({ 
   await expect(page.locator(".chat-message.agent").getByText("Run failed", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Run detail", exact: true }).click();
   await expect(page.getByLabel("Observability metrics")).toContainText("Tool Failures1");
-  await expect(page.getByText("tool_error", { exact: true })).toBeVisible();
+  await expect(page.getByText("Tool error", { exact: true })).toBeVisible();
+  const failedRunId = new URL(page.url()).searchParams.get("run");
+  expect(failedRunId).not.toBeNull();
+  const failedObservability = await page.request.get(`/api/runs/${failedRunId}/observability`);
+  expect(failedObservability.ok()).toBe(true);
+  expect((await failedObservability.json() as { termination_reason: string }).termination_reason).toBe("tool_error");
   await page.getByRole("button", { name: "Errors", exact: true }).click();
-  await expect(page.getByText("tool_error", { exact: true })).toBeVisible();
+  await expect(page.getByText("Tool error", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "All", exact: true }).click();
 
   await page.getByRole("button", { name: "Back to Playground" }).click();
@@ -333,7 +338,12 @@ test("observes failed and cancelled runs as distinct terminal states", async ({ 
   await expect(page.locator(".chat-message.agent").getByText("Run cancelled", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Run detail", exact: true }).click();
   await expect(page.getByLabel("Observability metrics")).toContainText("Cancelled");
-  await expect(page.getByText("cancelled", { exact: true }).last()).toBeVisible();
+  await expect(page.getByText("Cancelled", { exact: true }).last()).toBeVisible();
+  const cancelledRunId = new URL(page.url()).searchParams.get("run");
+  expect(cancelledRunId).not.toBeNull();
+  const cancelledObservability = await page.request.get(`/api/runs/${cancelledRunId}/observability`);
+  expect(cancelledObservability.ok()).toBe(true);
+  expect((await cancelledObservability.json() as { termination_reason: string }).termination_reason).toBe("cancelled");
 });
 
 test("renders an unknown generic SSE event once", async ({ page }) => {

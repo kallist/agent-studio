@@ -49,6 +49,12 @@ isolated behind the application runtime/provider boundaries.
 
 ## Testing notes
 
+UI translations live under `apps/web/i18n/messages`. To add copy, add the semantic key to the
+English source dictionary, add the same key to `zh-CN.ts`, and use the typed `t()` hook in the
+component. The TypeScript shape and key-parity Vitest fail when locale dictionaries diverge; run
+frontend typecheck, unit tests, and the i18n Playwright suite before submitting changes. See
+`docs/I18N.md` for boundaries and conventions.
+
 Playwright owns its Chromium browser dependency. Install it once with:
 
 ```powershell

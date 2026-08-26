@@ -7,6 +7,8 @@ Agent Studio is a development and debugging platform for building, running, trac
 
 The default experience is deterministic and needs no API key. The same application-owned runtime boundary also supports an opt-in, real-tested DeepSeek path and an implemented OpenAI Responses boundary whose live execution remains **NOT TESTED**.
 
+The Studio UI supports English and 简体中文 from one global language switcher. English remains the deterministic default, the browser preference persists across refreshes, and UI locale never changes prompts, model output, RAG, Memory, Evaluation data, provider requests, or persisted API values.
+
 ![Agent Studio v1 Dashboard with persisted Run telemetry](docs/assets/dashboard.png)
 
 ## Why it exists
@@ -168,4 +170,5 @@ See [V1 status and limitations](docs/V1_STATUS.md) and [Security](docs/SECURITY_
 - [PostgreSQL + pgvector](docs/POSTGRESQL_PGVECTOR.md) and [Container runtime](docs/CONTAINER_RUNTIME.md)
 - [CI, reliability, performance, and delivery](docs/CI_RELIABILITY_PERFORMANCE.md)
 - [Configuration](docs/CONFIGURATION.md), [Development](docs/DEVELOPMENT.md), and [Demo](docs/DEMO.md)
+- [UI internationalization](docs/I18N.md)
 - [Release notes](docs/RELEASE_NOTES_v1.0.md), [interview guide](docs/INTERVIEW_GUIDE.md), and [portfolio summary](docs/PORTFOLIO.md)

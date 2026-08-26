@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@/test-utils";
 import { describe, expect, it, vi } from "vitest";
 
 import { RunDetail } from "@/components/run-detail";
@@ -83,8 +83,10 @@ describe("RunDetail observability", () => {
   });
 
   it.each(["failed", "cancelled"] as const)("renders the %s terminal state without success", (status) => {
-    render(<RunDetail run={run(status)} events={[]} observability={metrics(status)} agent={null} onBack={vi.fn()} onRerun={vi.fn()} />);
-    expect(screen.getAllByText(status, { exact: true }).length).toBeGreaterThan(0);
+    const canonicalRun = run(status);
+    render(<RunDetail run={canonicalRun} events={[]} observability={metrics(status)} agent={null} onBack={vi.fn()} onRerun={vi.fn()} />);
+    expect(screen.getAllByText(status === "failed" ? "Failed" : "Cancelled", { exact: true }).length).toBeGreaterThan(0);
+    expect(canonicalRun.status).toBe(status);
     expect(screen.queryByText("5192")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Error" })).toBeInTheDocument();
   });

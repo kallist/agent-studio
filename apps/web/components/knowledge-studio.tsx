@@ -8,6 +8,8 @@ import {
   KnowledgeCitation,
   KnowledgeDocument,
 } from "@/lib/api";
+import { displayStatus } from "@/i18n/display";
+import { useI18n } from "@/i18n/provider";
 
 interface KnowledgeStudioProps {
   bases: KnowledgeBase[];
@@ -15,6 +17,7 @@ interface KnowledgeStudioProps {
 }
 
 export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) {
+  const { t } = useI18n();
   const [selectedId, setSelectedId] = useState<string | null>(bases[0]?.id ?? null);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [results, setResults] = useState<KnowledgeCitation[]>([]);
@@ -41,12 +44,12 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
       (loaded) => { if (active) setDocuments(loaded); },
       (reason: unknown) => {
         if (active) {
-          setError(reason instanceof Error ? reason.message : "Unable to load documents.");
+          setError(reason instanceof Error ? reason.message : t("knowledge.loadFailed"));
         }
       },
     ).finally(() => { if (active) setDocumentsLoading(false); });
     return () => { active = false; };
-  }, [effectiveSelectedId]);
+  }, [effectiveSelectedId, t]);
 
   async function createBase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -66,7 +69,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
       setDocumentsLoading(true);
       form.reset();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to create knowledge base.");
+      setError(reason instanceof Error ? reason.message : t("knowledge.createFailed"));
     } finally {
       setBusy(false);
     }
@@ -88,7 +91,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
       const updated = await api.listKnowledgeBases();
       onBasesChange(updated);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to upload document.");
+      setError(reason instanceof Error ? reason.message : t("knowledge.uploadFailed"));
     } finally {
       setBusy(false);
     }
@@ -99,10 +102,10 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
       const job = await api.getIngestionJob(jobId);
       await refreshDocuments(baseId);
       if (job.state === "completed") return;
-      if (job.state === "failed") throw new Error(job.error ?? "Ingestion failed.");
+      if (job.state === "failed") throw new Error(job.error ?? t("knowledge.ingestionFailed"));
       await new Promise((resolve) => window.setTimeout(resolve, 100));
     }
-    throw new Error("Ingestion is still running. Refresh to check its status.");
+    throw new Error(t("knowledge.ingestionRunning"));
   }
 
   async function search(event: FormEvent<HTMLFormElement>) {
@@ -116,7 +119,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
       const response = await api.searchKnowledge(selected.id, String(data.get("query")));
       setResults(response.results);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Search failed.");
+      setError(reason instanceof Error ? reason.message : t("knowledge.searchFailed"));
     } finally {
       setBusy(false);
     }
@@ -126,29 +129,29 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
     <section className="knowledge-section" aria-labelledby="knowledge-heading" aria-busy={busy}>
       <div className="knowledge-heading">
         <div>
-          <p className="eyebrow">KNOWLEDGE / RAG</p>
-          <h2 id="knowledge-heading">Ground agents in inspectable sources.</h2>
-          <p>Create a collection, ingest real documents asynchronously, and inspect ranked chunks.</p>
+          <p className="eyebrow">{t("knowledge.eyebrow")}</p>
+          <h2 id="knowledge-heading">{t("knowledge.title")}</h2>
+          <p>{t("knowledge.description")}</p>
         </div>
         <form className="compact-form" onSubmit={createBase}>
           <label>
-            Knowledge base name
-            <input name="name" placeholder="Product handbook" required maxLength={120} />
+            {t("knowledge.baseName")}
+            <input name="name" placeholder={t("knowledge.basePlaceholder")} required maxLength={120} />
           </label>
           <label>
-            Description
-            <input name="description" placeholder="Policies and operating notes" maxLength={2000} />
+            {t("knowledge.descriptionLabel")}
+            <input name="description" placeholder={t("knowledge.descriptionPlaceholder")} maxLength={2000} />
           </label>
-          <button className="primary-button" disabled={busy}>{busy ? "Working…" : "Create"}</button>
+          <button className="primary-button" disabled={busy}>{busy ? t("knowledge.working") : t("common.actions.create")}</button>
         </form>
       </div>
 
       {error && <div className="knowledge-error" role="alert">{error}</div>}
       <div className="knowledge-grid">
         <div className="knowledge-collections">
-          <h3>Collections <span>{bases.length}</span></h3>
+          <h3>{t("knowledge.collections")} <span>{bases.length}</span></h3>
           {bases.length === 0 ? (
-            <p className="muted-copy">Create a knowledge base to begin.</p>
+            <p className="muted-copy">{t("knowledge.emptyCollections")}</p>
           ) : (
             bases.map((base) => (
               <button
@@ -157,7 +160,7 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
                 onClick={() => { setSelectedId(base.id); setDocuments([]); setDocumentsLoading(true); setError(null); setResults([]); setSearched(false); }}
               >
                 <strong>{base.name}</strong>
-                <small>{base.document_count} documents · {base.embedding_provider}/{base.embedding_model} · {base.embedding_dimensions}d</small>
+                <small>{t(base.document_count === 1 ? "common.counts.documentsOne" : "common.counts.documentsOther", { count: base.document_count })} · {base.embedding_provider}/{base.embedding_model} · {base.embedding_dimensions}d</small>
               </button>
             ))
           )}
@@ -165,54 +168,54 @@ export function KnowledgeStudio({ bases, onBasesChange }: KnowledgeStudioProps) 
 
         <div className="knowledge-documents">
           <div className="knowledge-panel-title">
-            <div><h3>{selected?.name ?? "Documents"}</h3><p>{selected?.description}</p></div>
+            <div><h3>{selected?.name ?? t("knowledge.documents")}</h3><p>{selected?.description}</p></div>
             {selected && (
               <form onSubmit={upload} className="upload-form">
                 <label className="file-button">
-                  <span>Choose txt, md, or pdf</span>
+                  <span>{t("knowledge.chooseFile")}</span>
                   <input name="file" type="file" accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf" required />
                 </label>
-                <button disabled={busy}>Upload & ingest</button>
+                <button disabled={busy}>{t("knowledge.uploadIngest")}</button>
               </form>
             )}
           </div>
           <div className="document-list" aria-live="polite">
-            {documentsLoading && <div className="knowledge-skeleton" aria-label="Loading documents"><span /><span /></div>}
+            {documentsLoading && <div className="knowledge-skeleton" aria-label={t("common.loading.documents")}><span /><span /></div>}
             {documents.map((document) => (
               <article key={document.id} className="document-row">
                 <div><strong>{document.filename}</strong><small>{formatBytes(document.size_bytes)} · {document.mime_type}</small></div>
                 <span className={`ingestion-state ${document.ingestion?.state ?? "queued"}`}>
-                  {document.ingestion?.state ?? "queued"}
+                  {displayStatus(t, document.ingestion?.state ?? "queued")}
                 </span>
                 {document.ingestion?.error && <p>{document.ingestion.error}</p>}
               </article>
             ))}
-            {selected && !documentsLoading && documents.length === 0 && <p className="muted-copy">No documents uploaded yet.</p>}
+            {selected && !documentsLoading && documents.length === 0 && <p className="muted-copy">{t("knowledge.noDocuments")}</p>}
           </div>
         </div>
 
         <div className="knowledge-search">
           <form onSubmit={search}>
-            <label htmlFor="knowledge-query">Test retrieval</label>
-            <textarea id="knowledge-query" name="query" rows={3} required placeholder="Ask a question about these sources" />
-            <button className="primary-button" disabled={busy || !selected}>{busy ? "Searching…" : "Semantic + keyword search"}</button>
+            <label htmlFor="knowledge-query">{t("knowledge.testRetrieval")}</label>
+            <textarea id="knowledge-query" name="query" rows={3} required placeholder={t("knowledge.queryPlaceholder")} />
+            <button className="primary-button" disabled={busy || !selected}>{busy ? t("knowledge.searching") : t("knowledge.hybridSearch")}</button>
           </form>
           <div className="retrieval-results" aria-live="polite">
             {results.map((result, index) => (
               <details key={result.chunk_id} className="source-card" open={index === 0}>
                 <summary>
                   <span>[{index + 1}] {result.document}</span>
-                  <strong>score {result.score.toFixed(3)}</strong>
+                  <strong>{t("knowledge.score")} {result.score.toFixed(3)}</strong>
                 </summary>
                 <p>{result.content}</p>
                 <dl>
-                  <div><dt>Source</dt><dd>{result.source}</dd></div>
-                  <div><dt>Chunk</dt><dd>#{result.chunk_index} · {result.chunk_id}</dd></div>
-                  {typeof result.metadata.page === "number" && <div><dt>Page</dt><dd>{result.metadata.page}</dd></div>}
+                  <div><dt>{t("knowledge.source")}</dt><dd>{result.source}</dd></div>
+                  <div><dt>{t("knowledge.chunk")}</dt><dd>#{result.chunk_index} · {result.chunk_id}</dd></div>
+                  {typeof result.metadata.page === "number" && <div><dt>{t("knowledge.page")}</dt><dd>{result.metadata.page}</dd></div>}
                 </dl>
               </details>
             ))}
-            {searched && !busy && results.length === 0 && <p className="muted-copy">No matching chunks were found.</p>}
+            {searched && !busy && results.length === 0 && <p className="muted-copy">{t("knowledge.noMatches")}</p>}
           </div>
         </div>
       </div>
