@@ -262,14 +262,18 @@ infra/             local PostgreSQL/pgvector init assets
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) · [Runtime ADR](docs/ADR/001-agent-runtime.md) · [Run lifecycle](docs/RUN_LIFECYCLE.md)
-- [RAG design](docs/RAG_DESIGN.md) · [RAG lifecycle](docs/RAG_LIFECYCLE.md) · [Memory design](docs/MEMORY_DESIGN.md) · [Observability](docs/OBSERVABILITY_DESIGN.md) · [Evaluation](docs/EVALUATION_DESIGN.md)
-- [Security design](docs/SECURITY_DESIGN.md) · [Model providers](docs/MODEL_PROVIDERS.md)
-- [PostgreSQL + pgvector](docs/POSTGRESQL_PGVECTOR.md) · [Container runtime](docs/CONTAINER_RUNTIME.md)
-- [CI, reliability, performance, and delivery](docs/CI_RELIABILITY_PERFORMANCE.md)
-- [Configuration](docs/CONFIGURATION.md) · [Development](docs/DEVELOPMENT.md) · [Demo script](docs/DEMO.md)
-- [UI internationalization](docs/I18N.md) · [Engineering case study](docs/CASE_STUDY.md) · [v1 status matrix](docs/V1_STATUS.md)
-- [GitHub presentation notes](docs/GITHUB_PRESENTATION.md) · [Security policy](SECURITY.md)
+Where to start depends on what you need:
+
+| I want to… | Read |
+|---|---|
+| Understand why it is built this way | [Engineering case study](docs/CASE_STUDY.md) · [Architecture](docs/ARCHITECTURE.md) · [Runtime ADR](docs/ADR/001-agent-runtime.md) |
+| Follow one execution or one ingestion | [Run lifecycle](docs/RUN_LIFECYCLE.md) · [RAG lifecycle](docs/RAG_LIFECYCLE.md) |
+| Go deep on a subsystem | [RAG](docs/RAG_DESIGN.md) · [Memory](docs/MEMORY_DESIGN.md) · [Observability](docs/OBSERVABILITY_DESIGN.md) · [Evaluation](docs/EVALUATION_DESIGN.md) |
+| Check a capability claim | [v1 status matrix](docs/V1_STATUS.md) · [CI, reliability, and performance](docs/CI_RELIABILITY_PERFORMANCE.md) |
+| Operate or configure it | [Container runtime](docs/CONTAINER_RUNTIME.md) · [PostgreSQL + pgvector](docs/POSTGRESQL_PGVECTOR.md) · [Configuration](docs/CONFIGURATION.md) |
+| Run it or demo it | [Development](docs/DEVELOPMENT.md) · [Demo script](docs/DEMO.md) · [UI internationalization](docs/I18N.md) |
+| Review providers, security, or the UI language layer | [Model providers](docs/MODEL_PROVIDERS.md) · [OpenAI integration](docs/OPENAI_INTEGRATION.md) · [Security design](docs/SECURITY_DESIGN.md) |
+| See release and repository metadata | [Release notes v1.0](docs/RELEASE_NOTES_v1.0.md) · [Changelog](CHANGELOG.md) · [GitHub presentation notes](docs/GITHUB_PRESENTATION.md) · [Security policy](SECURITY.md) |
 
 ## Limitations
 

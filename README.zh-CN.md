@@ -1,6 +1,6 @@
 # Agent Studio
 
-**English** | [简体中文](README.zh-CN.md)
+[English](README.md) | **简体中文**
 
 **面向工具调用型 AI Agent 的全栈开发与调试工作台。**
 每一步、每次工具调用、每条检索结果与记忆写入都会以有序 Run 事件持久化，因此一次运行可以被解释和
@@ -234,13 +234,18 @@ infra/             本地 PostgreSQL/pgvector 初始化资源
 
 ## 文档
 
-- [架构](docs/ARCHITECTURE.md) · [运行时 ADR](docs/ADR/001-agent-runtime.md) · [运行生命周期](docs/RUN_LIFECYCLE.md) · [RAG 生命周期](docs/RAG_LIFECYCLE.md)
-- [RAG 设计](docs/RAG_DESIGN.md) · [记忆设计](docs/MEMORY_DESIGN.md) · [可观测性](docs/OBSERVABILITY_DESIGN.md) · [评测](docs/EVALUATION_DESIGN.md)
-- [安全设计](docs/SECURITY_DESIGN.md) · [模型 Provider](docs/MODEL_PROVIDERS.md)
-- [PostgreSQL + pgvector](docs/POSTGRESQL_PGVECTOR.md) · [容器运行时](docs/CONTAINER_RUNTIME.md)
-- [CI、可靠性、性能与交付](docs/CI_RELIABILITY_PERFORMANCE.md)
-- [配置](docs/CONFIGURATION.md) · [开发](docs/DEVELOPMENT.md) · [演示脚本](docs/DEMO.md)
-- [界面国际化](docs/I18N.md) · [工程案例研究](docs/CASE_STUDY.md) · [v1 状态矩阵](docs/V1_STATUS.md)
+可以按需求选择入口：
+
+| 我想…… | 阅读 |
+|---|---|
+| 理解为什么这样设计 | [工程案例研究](docs/CASE_STUDY.md) · [架构](docs/ARCHITECTURE.md) · [运行时 ADR](docs/ADR/001-agent-runtime.md) |
+| 跟随一次运行或一次知识摄入 | [运行生命周期](docs/RUN_LIFECYCLE.md) · [RAG 生命周期](docs/RAG_LIFECYCLE.md) |
+| 深入某个子系统 | [RAG 设计](docs/RAG_DESIGN.md) · [记忆设计](docs/MEMORY_DESIGN.md) · [可观测性](docs/OBSERVABILITY_DESIGN.md) · [评测](docs/EVALUATION_DESIGN.md) |
+| 核对某项能力声明 | [v1 状态矩阵](docs/V1_STATUS.md) · [CI、可靠性与性能](docs/CI_RELIABILITY_PERFORMANCE.md) |
+| 配置或运维 | [容器运行时](docs/CONTAINER_RUNTIME.md) · [PostgreSQL + pgvector](docs/POSTGRESQL_PGVECTOR.md) · [配置](docs/CONFIGURATION.md) |
+| 运行或演示 | [开发](docs/DEVELOPMENT.md) · [演示脚本](docs/DEMO.md) · [界面国际化](docs/I18N.md) |
+| 了解 Provider、安全与界面语言层 | [模型 Provider](docs/MODEL_PROVIDERS.md) · [OpenAI 集成](docs/OPENAI_INTEGRATION.md) · [安全设计](docs/SECURITY_DESIGN.md) |
+| 查看发布与仓库元数据 | [v1.0 发布说明](docs/RELEASE_NOTES_v1.0.md) · [变更日志](CHANGELOG.md) · [GitHub 展示建议](docs/GITHUB_PRESENTATION.md) |
 
 ## 已知限制
 
