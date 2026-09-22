@@ -74,6 +74,6 @@ temp/
 Thumbs.db
 Desktop.ini
 
-# Local Codex/Sites state that may contain machine-specific data
+# Local agent/editor session state that may contain machine-specific data
 .codex/
 .openai/.env*
