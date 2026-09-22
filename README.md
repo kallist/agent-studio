@@ -195,7 +195,8 @@ Measured in this repository at `main` (`ea90bbd`), before the packaging changes:
   (provider, PostgreSQL, and performance cases are opt-in). Ruff and strict `mypy` clean.
 - **PostgreSQL:** the same suites run against real PostgreSQL 17 + pgvector 0.8.6, asserting the real
   vector extension, `vector(256)`, HNSW, row-lock interleavings, and completed-only visibility.
-- **Frontend:** Vitest unit tests, strict TypeScript, ESLint, and a webpack production build.
+- **Frontend:** **31 Vitest tests passed** across 5 files, strict TypeScript, ESLint, and a webpack
+  production build.
 - **Browser:** 18 deterministic Mock-only Playwright scenarios, plus explicit DeepSeek and OpenAI
   suites that are not part of the default gate.
 - **Docker:** Compose validation, clean production image builds, and a non-root user assertion for both images.

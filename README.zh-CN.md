@@ -175,7 +175,7 @@ API 进程，以及带 pgvector 的 PostgreSQL 17。
   性能用例需要显式启用）。Ruff 与严格模式 `mypy` 通过。
 - **PostgreSQL：** 同一批用例会在真实 PostgreSQL 17 + pgvector 0.8.6 上运行，校验真实的向量扩展、
   `vector(256)`、HNSW、行锁交错顺序与 completed-only 可见性。
-- **前端：** Vitest 单元测试、严格 TypeScript、ESLint 与 webpack 生产构建。
+- **前端：** **Vitest 31 项测试通过**（5 个文件）、严格 TypeScript、ESLint 与 webpack 生产构建。
 - **浏览器：** 18 个确定性 Mock-only Playwright 场景；另有 DeepSeek 与 OpenAI 专属套件，不属于默认门禁。
 - **Docker：** Compose 校验、干净的生产镜像构建，以及两个镜像的非 root 用户断言。
 - **可靠性：** 有界恢复、并发、超时、取消，以及项目作用域内的容器重启与持久化验证。

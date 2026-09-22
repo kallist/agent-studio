@@ -381,7 +381,7 @@ repository.
   activation became idempotent, failure became terminal while preserving the previous generation,
   per-document concurrency was serialized, and every retrieval boundary was made to require a `completed`
   job. A startup migration backfilled generations for pre-existing chunks only when unambiguous.
-- **Result.** 27 RAG tests cover the invariant, nine of them locking generation consistency directly,
+- **Result.** 27 RAG tests cover the invariant, 11 of them targeting generation consistency directly,
   including a test that hand-inserts orphaned vectors and proves all four retrieval boundaries ignore them.
 
 ### Story 2 — Durable Memory raced with Memory being disabled

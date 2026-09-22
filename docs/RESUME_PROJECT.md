@@ -47,7 +47,8 @@ Playwright · OpenAI Agents SDK(适配层) · DeepSeek Chat Completions
 脏向量，而清理被中断还会留下孤儿向量，且检索路径分散在四处。解法是让分块以所属 `ingestion_job_id`
 写入不相交的负索引区间暂存，激活时在同一事务内删除旧代次、归一化索引并置为 `completed`；四条检索
 边界（SQLite 语义、pgvector 语义、混合检索词法侧、引用水合）各自独立要求所属任务为 `completed`。
-结果：**27 个 RAG 测试**覆盖该不变量，其中 9 个直接锁定代次一致性，历史遗留数据迁移采取 fail-closed。
+结果：**27 个 RAG 测试**覆盖该不变量，其中 **11 个**直接针对代次一致性规则，历史遗留数据迁移采取
+fail-closed。
 
 **3. 用数据库行锁解决持久记忆与"关闭记忆"之间的并发竞争**
 
@@ -96,7 +97,8 @@ Provider 验证走手动受保护工作流并默认将密钥置空。结果：�
 - Rebuilt knowledge ingestion around generation staging and atomic activation: chunks stage under a
   disjoint index range keyed to their owning ingestion job, activation deletes the prior generation and
   normalizes indices in one transaction, and all four retrieval boundaries independently require a
-  `completed` job, so failed or orphaned data can never become a citation. Covered by 27 RAG tests.
+  `completed` job, so failed or orphaned data can never become a citation. 11 of the 27 RAG tests target
+  this rule directly.
 - Implemented Agent-scoped durable Memory with explicit write/retrieval/expiration/delete policy and
   database-enforced ordering: settings changes and Run finalization serialize on one Agent-owned row
   (`SELECT ... FOR UPDATE` / `BEGIN IMMEDIATE`, unknown dialects fail closed), with tests asserting both
@@ -177,7 +179,7 @@ and docs in this repository.
 |---|---|---|---|
 | Application-owned bounded AgentLoop behind ports | `apps/api/app/runtime/engine.py`, `apps/api/app/domain/contracts.py` (`RuntimeLimits`), `apps/api/app/runtime/providers.py` | `apps/api/tests/test_agent_loop.py` (15 tests incl. `test_max_steps_terminates_after_exact_limit`, `test_total_timeout_interrupts_provider`, `test_cancellation_interrupts_an_in_flight_provider_call`) | `docs/ADR/001-agent-runtime.md`, `docs/RUN_LIFECYCLE.md` |
 | Capture-only SDK callbacks; only ToolExecutor executes | `apps/api/app/runtime/agents_sdk.py`, `apps/api/app/tools/registry.py` | `test_disabled_tool_hallucination_is_rejected_before_execution`, `test_duplicate_tool_call_is_not_executed_twice`, `test_per_tool_call_limit_blocks_changed_arguments` | `docs/MODEL_PROVIDERS.md` |
-| Generation staging and atomic activation | `apps/api/app/knowledge/repository.py`, `apps/api/app/knowledge/service.py` | `test_failed_reingestion_preserves_last_completed_generation`, `test_activation_failure_is_terminal_and_preserves_previous_generation`, `test_activation_cleanup_never_rewrites_an_already_completed_job` | `docs/RAG_LIFECYCLE.md`, `docs/RAG_DESIGN.md` |
+| Generation staging and atomic activation | `apps/api/app/knowledge/repository.py`, `apps/api/app/knowledge/service.py` | 11 of the 27 tests in `apps/api/tests/test_rag.py` target this rule, including `test_failed_reingestion_preserves_last_completed_generation`, `test_activation_failure_is_terminal_and_preserves_previous_generation`, and `test_activation_cleanup_never_rewrites_an_already_completed_job` | `docs/RAG_LIFECYCLE.md`, `docs/RAG_DESIGN.md` |
 | Four independent completed-only retrieval boundaries | `apps/api/app/knowledge/vector_store.py`, `apps/api/app/knowledge/repository.py` | `test_failed_dirty_generation_is_invisible_to_every_retrieval_boundary`, `test_pgvector_search_query_requires_completed_generation` | `docs/RAG_DESIGN.md` |
 | Legacy data migration fails closed | `apps/api/app/main.py` | `test_legacy_chunk_visibility_migration_is_fail_closed` | `docs/RAG_LIFECYCLE.md` |
 | Memory row-lock ordering, fail-closed dialects | `apps/api/app/persistence/repositories.py` (`_serialized_agent_memory_transaction`, `_agent_row_statement`), `apps/api/app/memory/policy.py` | `test_disable_wins_serialization_before_run_finalization`, `test_finalization_wins_then_disable_blocks_future_writes`, `test_postgresql_memory_row_locks_prove_both_orderings` | `docs/MEMORY_DESIGN.md` |
