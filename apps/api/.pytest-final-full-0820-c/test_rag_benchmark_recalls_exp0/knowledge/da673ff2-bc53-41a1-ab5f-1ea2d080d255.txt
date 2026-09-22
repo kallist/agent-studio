@@ -1,5 +1,0 @@
-Greenhouse operations guide
-
-The irrigation controller measures soil moisture before watering tomato beds. Operators calibrate humidity sensors weekly and record pump pressure after each cycle. The greenhouse dashboard reports temperature, water use, and ventilation alarms.
-
-Seasonal planting plans cover basil, peppers, and tomatoes. They do not define software adapters, model providers, upload security controls, or agent evaluation behavior.

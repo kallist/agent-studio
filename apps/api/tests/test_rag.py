@@ -46,6 +46,7 @@ from app.tools.knowledge_search import (
     bind_knowledge_bases,
 )
 from app.tools.registry import ToolExecutor, ToolRegistry
+from tests.polling import poll_until
 
 FIXTURES = Path(__file__).parents[3] / "tests" / "fixtures" / "rag"
 
@@ -179,26 +180,33 @@ async def upload_fixture(
 
 
 async def wait_for_job(client: AsyncClient, job_id: str, expected: str) -> dict[str, object]:
-    for _ in range(200):
+    async def probe() -> dict[str, object] | None:
         response = await client.get(f"/ingestion-jobs/{job_id}")
         assert response.status_code == 200
         job = response.json()
-        if job["state"] in {"completed", "failed"}:
-            assert job["state"] == expected
-            return job
-        await asyncio.sleep(0.01)
-    pytest.fail("ingestion did not reach a terminal state")
+        return job if job["state"] in {"completed", "failed"} else None
+
+    try:
+        job = await poll_until(probe, description=f"ingestion job {job_id} terminal state")
+    except TimeoutError as exc:
+        pytest.fail(str(exc))
+    assert job["state"] == expected
+    return job
 
 
 async def wait_for_repository_job(
     repository: KnowledgeRepository, job_id: UUID, terminal_states: set[str]
 ) -> str:
-    for _ in range(300):
+    async def probe() -> str | None:
         state = (await repository.get_job(job_id)).state.value
-        if state in terminal_states:
-            return state
-        await asyncio.sleep(0.01)
-    pytest.fail(f"ingestion job {job_id} did not reach {sorted(terminal_states)}")
+        return state if state in terminal_states else None
+
+    try:
+        return await poll_until(
+            probe, description=f"ingestion job {job_id} terminal state {sorted(terminal_states)}"
+        )
+    except TimeoutError as exc:
+        pytest.fail(str(exc))
 
 
 @pytest.mark.asyncio
@@ -705,31 +713,44 @@ async def test_two_sqlite_workers_cannot_process_same_document_concurrently(
         storage_root=tmp_path / "knowledge",
         max_file_bytes=1024,
     )
-    worker = LocalIngestionWorker(concurrent_service, worker_count=2)
-    await worker.start()
+    concurrent_service.bind_enqueue(lambda _job_id: None)
+
+    # Run both jobs through process_job concurrently, exactly as two worker tasks would.
+    # Using gather makes the claim race deterministic to assert: the database-enforced
+    # document mutex must let exactly one job claim the document, so exactly one job
+    # reaches the embedding stage and the other becomes terminal immediately. Depending
+    # on two worker tasks to happen to reach the queue at the same moment is not part of
+    # the guarantee: on a busy runner the second worker can dequeue only after the first
+    # job has finished, both jobs legitimately succeed, and the exclusivity claim is
+    # never exercised at all.
+    processing = [
+        asyncio.create_task(concurrent_service.process_job(job_id))
+        for job_id in replacement_ids
+    ]
     try:
-        await asyncio.wait_for(blocking_embeddings.entered.wait(), timeout=2)
-        for _ in range(300):
-            states = [(await repository.get_job(job_id)).state.value for job_id in replacement_ids]
-            if "failed" in states or blocking_embeddings.max_active_calls > 1:
-                break
-            await asyncio.sleep(0.01)
+        # If the mutex were broken, both jobs would reach embed, max_active_calls would
+        # reach 2 and neither call could return, so this wait would time out.
+        await asyncio.wait_for(blocking_embeddings.entered.wait(), timeout=30)
 
         during = await stable_service.search(
             [base.id], KnowledgeSearchRequest(query="stable-generation", top_k=1, hybrid=True)
         )
         assert during.results[0].chunk_id == old_chunk_id
-        blocking_embeddings.release.set()
-        terminal_states = [
-            await wait_for_repository_job(repository, job_id, {"completed", "failed"})
-            for job_id in replacement_ids
-        ]
     finally:
         blocking_embeddings.release.set()
-        await worker.stop()
+        await asyncio.wait_for(asyncio.gather(*processing, return_exceptions=True), timeout=30)
+
+    terminal_states = [
+        (await repository.get_job(job_id)).state.value for job_id in replacement_ids
+    ]
+    errors = [(await repository.get_job(job_id)).error for job_id in replacement_ids]
 
     assert blocking_embeddings.max_active_calls == 1
     assert sorted(terminal_states) == ["completed", "failed"]
+    assert (
+        "Another ingestion job is already processing this document."
+        in errors
+    )
     completed_job_id = replacement_ids[terminal_states.index("completed")]
     async with sessions() as session:
         active_generations = list(
@@ -1215,11 +1236,11 @@ async def test_pdf_text_is_ingested_with_page_metadata(client: AsyncClient) -> N
         json={"input": "Where is PDF page metadata retained?"},
     )
     run_id = run.json()["id"]
-    for _ in range(200):
+    async def run_terminal() -> dict[str, object] | None:
         current = (await client.get(f"/runs/{run_id}")).json()
-        if current["status"] in {"completed", "failed"}:
-            break
-        await asyncio.sleep(0.01)
+        return current if current["status"] in {"completed", "failed"} else None
+
+    current = await poll_until(run_terminal, description=f"run {run_id} terminal status")
     assert current["status"] == "completed"
     events = (await client.get(f"/runs/{run_id}/events")).json()
     tool_event = next(event for event in events if event["type"] == "tool.completed")
@@ -1287,11 +1308,11 @@ async def test_mock_agent_uses_knowledge_search_and_preserves_citations(
     )
     assert accepted.status_code == 202
     run_id = accepted.json()["id"]
-    for _ in range(200):
-        run = (await client.get(f"/runs/{run_id}")).json()
-        if run["status"] in {"completed", "failed"}:
-            break
-        await asyncio.sleep(0.01)
+    async def run_terminal() -> dict[str, object] | None:
+        current = (await client.get(f"/runs/{run_id}")).json()
+        return current if current["status"] in {"completed", "failed"} else None
+
+    run = await poll_until(run_terminal, description=f"run {run_id} terminal status")
     assert run["status"] == "completed"
     events = (await client.get(f"/runs/{run_id}/events")).json()
     tool_event = next(event for event in events if event["type"] == "tool.completed")
@@ -1354,11 +1375,11 @@ async def test_indirect_prompt_injection_stays_data_and_cannot_forge_provenance(
     )
     assert accepted.status_code == 202
     run_id = accepted.json()["id"]
-    for _ in range(200):
-        run = (await client.get(f"/runs/{run_id}")).json()
-        if run["status"] in {"completed", "failed"}:
-            break
-        await asyncio.sleep(0.01)
+    async def run_terminal() -> dict[str, object] | None:
+        current = (await client.get(f"/runs/{run_id}")).json()
+        return current if current["status"] in {"completed", "failed"} else None
+
+    run = await poll_until(run_terminal, description=f"run {run_id} terminal status")
 
     assert run["status"] == "completed"
     assert "cobalt-harbor" in str(run["output"])
@@ -1396,11 +1417,11 @@ async def test_agent_memory_and_knowledge_search_coexist(client: AsyncClient) ->
         assert accepted.status_code == 202
         run_id = accepted.json()["id"]
         current: dict[str, object] = {}
-        for _ in range(200):
-            current = (await client.get(f"/runs/{run_id}")).json()
-            if current["status"] in {"completed", "failed"}:
-                break
-            await asyncio.sleep(0.01)
+        async def run_terminal() -> dict[str, object] | None:
+            observed = (await client.get(f"/runs/{run_id}")).json()
+            return observed if observed["status"] in {"completed", "failed"} else None
+
+        current = await poll_until(run_terminal, description=f"run {run_id} terminal status")
         assert current["status"] == "completed"
         events = (await client.get(f"/runs/{run_id}/events")).json()
         return current, events

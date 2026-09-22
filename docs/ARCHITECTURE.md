@@ -30,13 +30,17 @@ The frontend never calls an LLM provider or a tool directly. FastAPI owns API co
 ```text
 agent-studio/
 ├── apps/
-│   ├── web/                 # Next.js application
-│   └── api/                 # FastAPI modular monolith
+│   ├── web/                 # Next.js application, i18n dictionaries, Vitest and Playwright specs
+│   └── api/                 # FastAPI modular monolith and pytest suites
 ├── docs/
-│   └── ADR/                 # Architecture decisions
-├── infra/                   # Local/deployment infrastructure
-├── tests/                   # Cross-application integration and E2E tests
-├── compose.yaml             # Local PostgreSQL/pgvector
+│   ├── ADR/                 # Architecture decisions
+│   ├── assets/              # Product screenshots referenced by documentation
+│   └── demo/                # Deterministic demo fixtures
+├── infra/                   # Local PostgreSQL/pgvector init assets
+├── scripts/                 # Docker helper and CI validation scripts
+├── tests/fixtures/          # Cross-application RAG benchmark and document fixtures
+├── .github/workflows/       # CI, Delivery Validation, manual provider live validation
+├── compose.yaml             # PostgreSQL/pgvector and application runtime
 ├── AGENTS.md
 └── README.md
 ```
@@ -56,7 +60,8 @@ app/
 ├── tools/           # Tool registry, validation, execution adapters
 ├── memory/          # Memory policies and store adapters
 ├── knowledge/       # Ingestion, retrieval, VectorStore adapters
-├── tracing/         # Runtime event model and TraceStore adapters
+├── evaluation/      # Suites, graders, worker, aggregation
+├── observability/   # Run/RunEvent projection, redaction, metrics
 └── persistence/     # SQLAlchemy models and repository adapters
 ```
 

@@ -17,6 +17,7 @@ from app.observability.redaction import REDACTED, redact_text, redact_value
 from app.persistence.database import settings
 from app.persistence.models import RunEventModel, RunModel
 from app.runtime.providers import MockProvider
+from tests.polling import poll_until
 
 
 def test_usage_aggregates_every_completed_provider_request() -> None:
@@ -147,12 +148,16 @@ async def _terminal_run(
 ) -> dict[str, object]:
     accepted = await client.post(f"/agents/{agent_id}/runs", json={"input": user_input})
     assert accepted.status_code == 202
-    for _ in range(100):
-        run = (await client.get(f"/runs/{accepted.json()['id']}")).json()
-        if run["status"] in {"completed", "failed", "cancelled"}:
-            return run
-        await asyncio.sleep(0.01)
-    pytest.fail("run did not terminate")
+    run_id = accepted.json()["id"]
+
+    async def probe() -> dict[str, object] | None:
+        observed = (await client.get(f"/runs/{run_id}")).json()
+        return observed if observed["status"] in {"completed", "failed", "cancelled"} else None
+
+    try:
+        return await poll_until(probe, description=f"run {run_id} terminal status")
+    except TimeoutError as exc:
+        pytest.fail(str(exc))
 
 
 @pytest.mark.asyncio
@@ -242,11 +247,13 @@ async def test_cancelled_run_observability_is_not_failed(
     )
     await asyncio.wait_for(started.wait(), timeout=1)
     assert (await client.post(f"/runs/{accepted.json()['id']}/cancel")).status_code == 202
-    for _ in range(100):
-        metrics = (await client.get(f"/runs/{accepted.json()['id']}/observability")).json()
-        if metrics["status"] == "cancelled":
-            break
-        await asyncio.sleep(0.01)
+    run_id = accepted.json()["id"]
+
+    async def cancelled_metrics() -> dict[str, object] | None:
+        observed = (await client.get(f"/runs/{run_id}/observability")).json()
+        return observed if observed["status"] == "cancelled" else None
+
+    metrics = await poll_until(cancelled_metrics, description=f"run {run_id} cancelled metrics")
     assert metrics["status"] == "cancelled"
     assert metrics["termination_reason"] == "cancelled"
     assert metrics["error_category"] == "cancelled"

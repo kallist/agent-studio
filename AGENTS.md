@@ -93,26 +93,19 @@ For each feature:
 
 For a bug fix, establish the root cause first. Never make tests pass by deleting or skipping tests, weakening assertions, or catching and ignoring failures.
 
-# Plugin and Skill Rules
+# Development tooling rules
 
-Use `docs/CODEX_CAPABILITIES.md` as the capability map. A catalog entry is not proof that a tool is connected.
+A tool appearing in an agent or editor catalog is not proof that it is connected or usable. Verify with a real call before relying on it.
 
-## OpenAI documentation and Agents SDK
+## OpenAI and Agents SDK documentation
 
-- For OpenAI API, Responses API, Agents SDK, tool calling, structured output, streaming, or other version-sensitive behavior, verify current official OpenAI documentation with `openai-docs` or the OpenAI Developers plugin.
-- Do not select or use the Agents SDK merely because its Skill is installed. Preserve the hybrid boundary in ADR-001 unless a new ADR replaces it.
+- For OpenAI API, Responses API, Agents SDK, tool calling, structured output, streaming, or other version-sensitive behavior, verify current official OpenAI documentation rather than relying on training data.
+- Do not adopt the Agents SDK merely because it is available. Preserve the hybrid boundary in ADR-001 unless a new ADR replaces it.
 
 ## Browser and UI verification
 
-- After implementing a UI feature, prefer the verified in-app Browser to open localhost, exercise real interactions, inspect DOM and console errors, capture evidence when useful, and perform responsive QA.
+- After implementing a UI feature, open the running app, exercise real interactions, inspect DOM and console errors, capture evidence when useful, and perform responsive QA.
 - Source inspection alone is not UI validation.
-
-## GitHub, Computer Use, Canva, and Data Analytics
-
-- GitHub may be used for read-only repository context and later review/PR/CI assistance. Do not push, publish, merge, create a public repository, or create a release without an explicit user request.
-- Use Computer Use only when Browser and file tools cannot complete verification. Never use it to operate Codex itself or a terminal.
-- Canva is currently unauthenticated. Do not use it or bypass authentication.
-- Use Data Analytics only for a genuine analytics or dashboard requirement.
 
 # Security Rules
 
