@@ -18,6 +18,19 @@ service.
 [Architecture](#architecture) · [Demo scenarios](#demo-scenarios) ·
 [Limitations](#limitations) · [Documentation](#documentation)
 
+<details>
+<summary>All sections</summary>
+
+[What Agent Studio is](#what-agent-studio-is) · [Why this exists](#why-this-exists) ·
+[Capabilities](#capabilities) · [Architecture](#architecture) ·
+[Engineering highlights](#engineering-highlights) · [Quick start](#quick-start) ·
+[Demo scenarios](#demo-scenarios) · [Model providers](#model-providers) ·
+[Quality and validation](#quality-and-validation) · [Tech stack](#tech-stack) ·
+[Project structure](#project-structure) · [Documentation](#documentation) ·
+[Limitations](#limitations) · [License](#license)
+
+</details>
+
 ![Agent Studio Dashboard showing persisted runs and measured telemetry](docs/assets/dashboard.png)
 
 ## What Agent Studio is
