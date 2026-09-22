@@ -1,37 +1,40 @@
 # GitHub presentation
 
-Recommended repository metadata and a pre-publish checklist for Agent Studio. These are recommendations
-only: nothing in this document changes the GitHub repository, and no remote setting was modified while
-preparing this packaging work.
+Repository metadata and a pre-publication checklist for Agent Studio, recorded as a factual snapshot
+rather than as a set of recommendations. The values below were read back from the GitHub API after the
+metadata was applied.
 
-Current state, read from the GitHub API and local git on the packaging branch:
+Current state, read from the GitHub API:
 
-| Item | Current value |
+| Item | Value |
 |---|---|
 | Repository | `kallist/agent-studio` |
-| Visibility | **private** |
+| Visibility | **public** |
 | Default branch | `main` |
-| Repository description | **empty** |
-| Topics | **not set** |
-| License | MIT |
+| Repository description | *Full-stack workbench for building, running, and debugging tool-using AI agents: bounded agent runtime, RAG with citations, durable memory, persisted run traces, and deterministic evaluation.* |
+| Topics | 16 set (see below) |
+| License | MIT, detected by GitHub from `LICENSE` |
 | Latest release | `v1.0.0`, published, not a draft, not a prerelease |
 | Tags | `v1.0.0` only |
-| Workflows | `ci.yml` (CI), `delivery.yml` (Delivery Validation), `provider-live.yml` (manual only) |
+| Homepage | intentionally empty — there is no live hosted product, and a placeholder URL would be a false claim |
+| Workflows | `ci.yml` (CI), `delivery.yml` (Delivery Validation), `provider-live.yml` (manual only) — all `active` |
 
-Two consequences follow, and both matter more than wording:
+The description and topics deliberately avoid `production-ready`, `enterprise-grade`, `kubernetes`, and
+`microservices`: v1 is a single-user local workbench and none of those describe it. `openai` is also
+absent because that live path is **NOT TESTED**; `deepseek` is present because it carries real online
+validation.
 
-1. **A private repository is invisible to anyone you have not invited.** No amount of README polish
-   produces a 15-second impression for a recruiter until visibility changes. Decide deliberately whether
-   to make it public before investing in social preview art.
-2. **The description and topics are empty**, so GitHub search and the repository header currently say
-   nothing about the project even to people who have access.
+## Topics applied
 
-## Recommended repository description
+```text
+agentic-ai, ai-agents, deepseek, docker, evaluation, fastapi, llm, llmops,
+nextjs, observability, pgvector, postgresql, python, rag,
+retrieval-augmented-generation, typescript
+```
 
-Short enough for the repository header, natural to read, and carrying the real search terms:
+## Alternative descriptions
 
-> Full-stack workbench for building, running, and debugging tool-using AI agents: bounded agent runtime,
-> RAG with citations, durable memory, persisted run traces, and deterministic evaluation.
+Kept for future edits. The applied description is the first of these.
 
 A tighter variant if the header truncates:
 
@@ -40,39 +43,25 @@ A tighter variant if the header truncates:
 
 Both stay accurate: no user counts, no traffic, no production claim, no benchmark figure.
 
-## Recommended topics
+## Pinned-repository description
 
-GitHub allows up to 20 topics. These 15 are all genuinely relevant to what the repository contains:
-
-```text
-ai-agents  agentic-ai  llm  rag  retrieval-augmented-generation
-fastapi  nextjs  typescript  python  postgresql
-pgvector  docker  observability  evaluation  llmops
-```
-
-Deliberately omitted:
-
-- `production-ready`, `enterprise`, `kubernetes`, `microservices` — v1 is a single-user local workbench
-  and none of those describe it.
-- `openai` — the OpenAI path is implemented but its live execution is **NOT TESTED**; `llmops` and
-  `ai-agents` describe the repository more honestly. `deepseek` is a legitimate addition if you want the
-  real-tested provider represented.
-
-## Recommended pinned-repository description
-
-If this is pinned on a profile, the pin shows the repository description. Use a version that reads well
-without surrounding context:
+If this repository is pinned on the profile, the pin shows the repository description. A version that
+reads well without surrounding context:
 
 > A local Agent development workbench that makes agent runs observable and reproducible: application-owned
 > bounded runtime, generation-consistent RAG, durable memory, and deterministic evaluation. Mock by
 > default, no API key needed.
 
-## Recommended social preview
+This is a manual profile step, not a repository setting.
 
-GitHub's social preview is a 1280×640 image shown when the repository link is shared. Whether one is
-currently configured is **NOT VERIFIED** — the public REST API does not expose that field.
+## Social preview
 
-Recommended composition, using only real project assets:
+GitHub's social preview is a 1280×640 image shown when the repository link is shared. Whether a custom one
+is configured is **NOT VERIFIED** — the REST API does not expose that field, and when it is unset GitHub
+falls back to generating a card from the README, which already shows the project title, description, and
+hero screenshot.
+
+If you want an explicit image, build it from real assets only:
 
 - A real Studio screenshot cropped to the upper portion of the UI, where the sidebar and the dashboard
   metrics are both readable. `docs/assets/dashboard.png` is a 1440×900 capture and crops cleanly at this
@@ -81,48 +70,57 @@ Recommended composition, using only real project assets:
 - No stock art, no device mockups, no generated imagery.
 
 Do not create a stylized or AI-generated cover: the screenshot is the credible asset, and a fake UI image
-would contradict the project's own honesty discipline.
+would contradict the project's own honesty discipline. This is a manual web-UI step.
 
-## Pre-publish checklist
+## Pre-publication checklist
 
-Run through this before treating the repository as portfolio-facing.
+Completed items reflect what was actually verified before the repository was made public on
+2026-09-22; the remaining boxes are manual steps or deliberate non-goals.
 
 ### Presentation
 
-- [ ] Repository description set from the recommendation above.
-- [ ] Topics set (15 recommended, none overstating maturity).
-- [ ] README renders correctly on GitHub: Mermaid diagram renders, badges resolve, all five screenshots load.
-- [ ] README first screen readable without scrolling: title, positioning, badges, one paragraph, hero image.
-- [ ] Social preview image configured (1280×640) using a real screenshot.
-- [ ] Repository pinned on the profile with a description that stands alone.
+- [x] Repository description set (applied, read back from the API).
+- [x] Topics set: 16, none overstating maturity (applied, read back from the API).
+- [x] README renders correctly on GitHub: badges resolve (all four return 200), all five screenshots load
+      (each fetched anonymously from `raw.githubusercontent.com` at 200).
+- [x] README first screen readable without scrolling: title, positioning, scope disclaimer, four badges,
+      and quick links all appear before the hero image at line 34.
+- [ ] Social preview image configured (1280×640). **Manual step** — see above.
+- [ ] Repository pinned on the profile. **Manual step** — profile-level, not a repository setting.
 
 ### Content
 
-- [ ] `docs/` index reachable from the README documentation section.
-- [ ] Architecture, Run lifecycle, and RAG lifecycle diagrams render.
-- [ ] Case study present and free of claims the code does not support.
-- [ ] Every capability status matches `docs/V1_STATUS.md`.
-- [ ] "NOT TESTED" appears wherever it must: OpenAI live paths, horizontal operation, managed PostgreSQL,
+- [x] `docs/` index reachable from the README documentation section.
+- [x] Architecture, Run lifecycle, and RAG lifecycle diagrams present and balanced.
+- [x] Case study present and free of claims the code does not support.
+- [x] Every capability status matches `docs/V1_STATUS.md`.
+- [x] "NOT TESTED" appears wherever it must: OpenAI live paths, horizontal operation, managed PostgreSQL,
       internet load, SLA.
+- [x] `README.zh-CN.md` exists with the same badges, numbers, section count, and the same 11 capability
+      statuses as the English README.
 
 ### Access and process
 
-- [ ] Visibility decision made deliberately. If the repository becomes public, remember that history,
-      issues, and pull requests become visible too.
+- [x] Visibility decision made deliberately, and the consequences reviewed first: history, issues, and
+      pull requests became visible at the same moment.
 - [ ] Branch protection on `main` requires the seven CI job names: `Backend`, `PostgreSQL`, `Frontend`,
-      `Playwright`, `Docker`, `Reliability`, `Performance`.
-- [ ] GitHub Actions has run at least once on `main` so the two badges are not grey.
-- [ ] Provisioning a future release follows the existing tag convention and links `docs/RELEASE_NOTES_v1.0.md`.
+      `Playwright`, `Docker`, `Reliability`, `Performance`. **Manual step** — repository settings.
+- [x] GitHub Actions has run on `main` since publication, so both badges are live rather than grey: the
+      post-merge CI and Delivery Validation runs both succeeded.
+- [ ] Provisioning a future release follows the existing tag convention and links
+      `docs/RELEASE_NOTES_v1.0.md`. Nothing was tagged or released as part of making this repository public.
 
 ### Safety
 
-- [ ] Secret scan clean: no API keys, tokens, credentials, connection strings, or `.env` content in the
-      tree, screenshots, docs, or git history.
-- [ ] No private absolute paths anywhere in published files: no `C:\Users\...`, no `C:\aiwork\...`, no
-      `.codex/worktrees`, no machine names, no usernames.
-- [ ] Screenshots contain no browser chrome, terminal output, tokens, or personal data.
-- [ ] `.env.example` contains placeholders only.
-- [ ] No local database, cache, or test-run artifact is tracked.
+- [x] Secret scan clean across the working tree and every commit's tree: no API keys, tokens, credentials,
+      connection strings, or `.env` content.
+- [x] No private absolute paths in published files. The only matches in history are a test sentinel that
+      asserts such paths never leak into serialized output, this checklist's own wording, and
+      `docs/BASELINE.md`, which has since been removed from the tree.
+- [x] Screenshots contain no browser chrome, terminal output, tokens, or personal data; all five are
+      1440×900 captures produced by the checked-in capture script.
+- [x] `.env.example` contains placeholders and empty values only.
+- [x] No local database, cache, or test-run artifact is tracked.
 
 ## Notes for later
 
