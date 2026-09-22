@@ -713,33 +713,44 @@ async def test_two_sqlite_workers_cannot_process_same_document_concurrently(
         storage_root=tmp_path / "knowledge",
         max_file_bytes=1024,
     )
-    worker = LocalIngestionWorker(concurrent_service, worker_count=2)
-    await worker.start()
-    try:
-        await asyncio.wait_for(blocking_embeddings.entered.wait(), timeout=2)
-        async def generation_settled() -> bool:
-            states = [
-                (await repository.get_job(job_id)).state.value for job_id in replacement_ids
-            ]
-            return "failed" in states or blocking_embeddings.max_active_calls > 1
+    concurrent_service.bind_enqueue(lambda _job_id: None)
 
-        await poll_until(generation_settled, description="replacement generation outcome")
+    # Run both jobs through process_job concurrently, exactly as two worker tasks would.
+    # Using gather makes the claim race deterministic to assert: the database-enforced
+    # document mutex must let exactly one job claim the document, so exactly one job
+    # reaches the embedding stage and the other becomes terminal immediately. Depending
+    # on two worker tasks to happen to reach the queue at the same moment is not part of
+    # the guarantee: on a busy runner the second worker can dequeue only after the first
+    # job has finished, both jobs legitimately succeed, and the exclusivity claim is
+    # never exercised at all.
+    processing = [
+        asyncio.create_task(concurrent_service.process_job(job_id))
+        for job_id in replacement_ids
+    ]
+    try:
+        # If the mutex were broken, both jobs would reach embed, max_active_calls would
+        # reach 2 and neither call could return, so this wait would time out.
+        await asyncio.wait_for(blocking_embeddings.entered.wait(), timeout=30)
 
         during = await stable_service.search(
             [base.id], KnowledgeSearchRequest(query="stable-generation", top_k=1, hybrid=True)
         )
         assert during.results[0].chunk_id == old_chunk_id
-        blocking_embeddings.release.set()
-        terminal_states = [
-            await wait_for_repository_job(repository, job_id, {"completed", "failed"})
-            for job_id in replacement_ids
-        ]
     finally:
         blocking_embeddings.release.set()
-        await worker.stop()
+        await asyncio.wait_for(asyncio.gather(*processing, return_exceptions=True), timeout=30)
+
+    terminal_states = [
+        (await repository.get_job(job_id)).state.value for job_id in replacement_ids
+    ]
+    errors = [(await repository.get_job(job_id)).error for job_id in replacement_ids]
 
     assert blocking_embeddings.max_active_calls == 1
     assert sorted(terminal_states) == ["completed", "failed"]
+    assert (
+        "Another ingestion job is already processing this document."
+        in errors
+    )
     completed_job_id = replacement_ids[terminal_states.index("completed")]
     async with sessions() as session:
         active_generations = list(
