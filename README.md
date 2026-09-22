@@ -259,6 +259,7 @@ infra/             local PostgreSQL/pgvector init assets
 - [CI, reliability, performance, and delivery](docs/CI_RELIABILITY_PERFORMANCE.md)
 - [Configuration](docs/CONFIGURATION.md) · [Development](docs/DEVELOPMENT.md) · [Demo script](docs/DEMO.md)
 - [UI internationalization](docs/I18N.md) · [Engineering case study](docs/CASE_STUDY.md) · [v1 status matrix](docs/V1_STATUS.md)
+- [GitHub presentation notes](docs/GITHUB_PRESENTATION.md) · [Security policy](SECURITY.md)
 
 ## Limitations
 

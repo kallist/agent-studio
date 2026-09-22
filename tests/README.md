@@ -1,5 +1,10 @@
-# Cross-application tests
+# Cross-application fixtures
 
-This directory is reserved for integration and end-to-end tests that cross the web/API boundary. App-local unit tests should live with their owning application.
+Application tests live with their application: `apps/api/tests` for pytest and `apps/web/e2e` for
+Playwright. This directory holds only fixtures shared across that boundary.
 
-Status: **NOT IMPLEMENTED**. No test runner or fake test result is included in the engineering baseline.
+`tests/fixtures/rag/` contains small original documents used by retrieval tests, including
+`benchmark.json`, which records deterministic recall expectations for those fixtures. It is a
+regression fixture, not a published retrieval benchmark.
+
+See the repository [README](../../README.md) for the full quality and validation commands.
