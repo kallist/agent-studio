@@ -1,5 +1,7 @@
 # Agent Studio
 
+**English** | [简体中文](README.zh-CN.md)
+
 **A full-stack workbench for building, running, and debugging tool-using AI agents.**
 Every step, tool call, retrieval, and Memory write is persisted as an ordered Run event, so a Run can
 be explained and evaluated after the fact instead of guessed at from a chat transcript.
