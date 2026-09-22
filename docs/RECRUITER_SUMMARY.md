@@ -66,6 +66,7 @@ Every capability claim carries a status and a source. Nothing here is estimated.
 | Real database behavior | Suites run against real PostgreSQL 17 + pgvector 0.8.6, asserting the vector extension, `vector(256)`, HNSW, row-lock interleavings, and completed-only SQL |
 | Browser behavior | 18 deterministic Mock-only Playwright scenarios over the real web → API → runtime path |
 | Reliability | Cancellation, timeout, concurrency, event ordering, queue bounds, and restart recovery, plus container restart and persistence validation |
+| Docker quick start | Executed on a clean checkout: fresh Compose stack healthy, `/health` 200, same-origin `/api` proxy working, and a Mock Agent run completing `Calculate 128 * 37 + 456` → `5192` with no provider key configured |
 | Provider status | DeepSeek: real online validation. OpenAI Responses and embeddings: implemented, **live NOT TESTED** |
 | Performance | Synthetic p50/p95 regression baseline over nine scenarios — reported as a regression guard, not as a speed claim |
 | Capability matrix | [docs/V1_STATUS.md](V1_STATUS.md) lists implemented, tested, and not-tested status per capability with its primary source |

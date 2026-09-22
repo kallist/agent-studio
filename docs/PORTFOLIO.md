@@ -146,6 +146,10 @@ The project treats "how do you know?" as a first-class requirement.
 - **Performance** is a synthetic regression baseline, not a benchmark result. It reports p50/p95 and
   throughput for nine scenarios against Mock on one machine, with deliberately wide thresholds because
   hosted runners are noisy. It proves regressions are caught, not that the system is fast.
+- **The quick start was executed, not assumed.** On a clean checkout the Compose stack reached healthy,
+  `/health` returned `200`, the same-origin `/api` proxy served the API, and an API-created Mock Agent ran
+  `Calculate 128 * 37 + 456` to `5192` with the ordered event sequence the design documents claim — with no
+  provider key configured.
 
 ## Screenshots
 

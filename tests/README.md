@@ -7,4 +7,4 @@ Playwright. This directory holds only fixtures shared across that boundary.
 `benchmark.json`, which records deterministic recall expectations for those fixtures. It is a
 regression fixture, not a published retrieval benchmark.
 
-See the repository [README](../../README.md) for the full quality and validation commands.
+See the repository [README](../README.md) for the full quality and validation commands.

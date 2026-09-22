@@ -130,6 +130,10 @@ API 进程，以及带 pgvector 的 PostgreSQL 17。
 全新数据库启动后是空的。下面的[演示场景](#演示场景)可在约五分钟内创建出全部所需数据；完整分步脚本见
 [docs/DEMO.md](docs/DEMO.md)。
 
+上面的命令已在干净检出上、针对本次修订实际验证：`api` 与 `db` 报告健康，`/health` 返回 `200`，同源
+`/api` 代理正常工作，通过 API 创建的 Mock Agent 执行 `Calculate 128 * 37 + 456` 得到 `5192`，且事件
+顺序与[运行生命周期](docs/RUN_LIFECYCLE.md)记录一致——全程未配置任何 Provider 密钥。
+
 ## 演示场景
 
 | # | 操作 | 预期结果 |

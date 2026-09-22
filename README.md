@@ -148,6 +148,11 @@ confirmation.
 A fresh database starts empty. The [demo scenarios](#demo-scenarios) below create everything you need
 in about five minutes; the full click-by-click script is [docs/DEMO.md](docs/DEMO.md).
 
+The commands above were verified against this revision on a clean checkout: the stack reported
+`api` and `db` healthy, `/health` returned `200`, the same-origin `/api` proxy worked, and a Mock Agent
+created through the API completed `Calculate 128 * 37 + 456` with output `5192` and the ordered event
+sequence documented in [Run lifecycle](docs/RUN_LIFECYCLE.md) — with no provider key configured.
+
 ## Demo scenarios
 
 | # | Do this | You should see |
@@ -194,6 +199,9 @@ Measured in this repository at `main` (`ea90bbd`), before the packaging changes:
 - **Browser:** 18 deterministic Mock-only Playwright scenarios, plus explicit DeepSeek and OpenAI
   suites that are not part of the default gate.
 - **Docker:** Compose validation, clean production image builds, and a non-root user assertion for both images.
+- **Quick start:** executed on a clean checkout against this revision — fresh Compose stack reached
+  healthy, `/health` returned `200`, the same-origin `/api` proxy served the API, and an API-created Mock
+  Agent ran `Calculate 128 * 37 + 456` to `5192` with no provider key configured.
 - **Reliability:** bounded recovery, concurrency, timeout, cancellation, and project-scoped container
   restart/persistence validation.
 - **Performance:** a synthetic PostgreSQL/pgvector baseline (nine scenarios reporting p50/p95 and
