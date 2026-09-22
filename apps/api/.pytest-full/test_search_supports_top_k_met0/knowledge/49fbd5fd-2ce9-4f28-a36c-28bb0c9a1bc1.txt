@@ -1,5 +1,0 @@
-Agent Studio upload policy
-
-Knowledge uploads are limited to UTF-8 text, Markdown, and PDFs with extractable text. Filenames cannot contain paths. Files are size-limited and both their extension and MIME type are checked. Parser errors fail only the ingestion job and do not crash the API service.
-
-HTTP tools must defend against SSRF. File tools must defend against path traversal. Secrets and credentials must never be committed.
