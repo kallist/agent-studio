@@ -253,7 +253,7 @@ infra/             local PostgreSQL/pgvector init assets
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) · [Runtime ADR](docs/ADR/001-agent-runtime.md) · [Run lifecycle](docs/RUN_LIFECYCLE.md)
-- [RAG design](docs/RAG_DESIGN.md) · [Memory design](docs/MEMORY_DESIGN.md) · [Observability](docs/OBSERVABILITY_DESIGN.md) · [Evaluation](docs/EVALUATION_DESIGN.md)
+- [RAG design](docs/RAG_DESIGN.md) · [RAG lifecycle](docs/RAG_LIFECYCLE.md) · [Memory design](docs/MEMORY_DESIGN.md) · [Observability](docs/OBSERVABILITY_DESIGN.md) · [Evaluation](docs/EVALUATION_DESIGN.md)
 - [Security design](docs/SECURITY_DESIGN.md) · [Model providers](docs/MODEL_PROVIDERS.md)
 - [PostgreSQL + pgvector](docs/POSTGRESQL_PGVECTOR.md) · [Container runtime](docs/CONTAINER_RUNTIME.md)
 - [CI, reliability, performance, and delivery](docs/CI_RELIABILITY_PERFORMANCE.md)
