@@ -46,6 +46,7 @@ from app.tools.knowledge_search import (
     bind_knowledge_bases,
 )
 from app.tools.registry import ToolExecutor, ToolRegistry
+from tests.polling import poll_until
 
 FIXTURES = Path(__file__).parents[3] / "tests" / "fixtures" / "rag"
 
@@ -179,26 +180,33 @@ async def upload_fixture(
 
 
 async def wait_for_job(client: AsyncClient, job_id: str, expected: str) -> dict[str, object]:
-    for _ in range(200):
+    async def probe() -> dict[str, object] | None:
         response = await client.get(f"/ingestion-jobs/{job_id}")
         assert response.status_code == 200
         job = response.json()
-        if job["state"] in {"completed", "failed"}:
-            assert job["state"] == expected
-            return job
-        await asyncio.sleep(0.01)
-    pytest.fail("ingestion did not reach a terminal state")
+        return job if job["state"] in {"completed", "failed"} else None
+
+    try:
+        job = await poll_until(probe, description=f"ingestion job {job_id} terminal state")
+    except TimeoutError as exc:
+        pytest.fail(str(exc))
+    assert job["state"] == expected
+    return job
 
 
 async def wait_for_repository_job(
     repository: KnowledgeRepository, job_id: UUID, terminal_states: set[str]
 ) -> str:
-    for _ in range(300):
+    async def probe() -> str | None:
         state = (await repository.get_job(job_id)).state.value
-        if state in terminal_states:
-            return state
-        await asyncio.sleep(0.01)
-    pytest.fail(f"ingestion job {job_id} did not reach {sorted(terminal_states)}")
+        return state if state in terminal_states else None
+
+    try:
+        return await poll_until(
+            probe, description=f"ingestion job {job_id} terminal state {sorted(terminal_states)}"
+        )
+    except TimeoutError as exc:
+        pytest.fail(str(exc))
 
 
 @pytest.mark.asyncio
@@ -709,11 +717,13 @@ async def test_two_sqlite_workers_cannot_process_same_document_concurrently(
     await worker.start()
     try:
         await asyncio.wait_for(blocking_embeddings.entered.wait(), timeout=2)
-        for _ in range(300):
-            states = [(await repository.get_job(job_id)).state.value for job_id in replacement_ids]
-            if "failed" in states or blocking_embeddings.max_active_calls > 1:
-                break
-            await asyncio.sleep(0.01)
+        async def generation_settled() -> bool:
+            states = [
+                (await repository.get_job(job_id)).state.value for job_id in replacement_ids
+            ]
+            return "failed" in states or blocking_embeddings.max_active_calls > 1
+
+        await poll_until(generation_settled, description="replacement generation outcome")
 
         during = await stable_service.search(
             [base.id], KnowledgeSearchRequest(query="stable-generation", top_k=1, hybrid=True)
@@ -1215,11 +1225,11 @@ async def test_pdf_text_is_ingested_with_page_metadata(client: AsyncClient) -> N
         json={"input": "Where is PDF page metadata retained?"},
     )
     run_id = run.json()["id"]
-    for _ in range(200):
+    async def run_terminal() -> dict[str, object] | None:
         current = (await client.get(f"/runs/{run_id}")).json()
-        if current["status"] in {"completed", "failed"}:
-            break
-        await asyncio.sleep(0.01)
+        return current if current["status"] in {"completed", "failed"} else None
+
+    current = await poll_until(run_terminal, description=f"run {run_id} terminal status")
     assert current["status"] == "completed"
     events = (await client.get(f"/runs/{run_id}/events")).json()
     tool_event = next(event for event in events if event["type"] == "tool.completed")
@@ -1287,11 +1297,11 @@ async def test_mock_agent_uses_knowledge_search_and_preserves_citations(
     )
     assert accepted.status_code == 202
     run_id = accepted.json()["id"]
-    for _ in range(200):
-        run = (await client.get(f"/runs/{run_id}")).json()
-        if run["status"] in {"completed", "failed"}:
-            break
-        await asyncio.sleep(0.01)
+    async def run_terminal() -> dict[str, object] | None:
+        current = (await client.get(f"/runs/{run_id}")).json()
+        return current if current["status"] in {"completed", "failed"} else None
+
+    run = await poll_until(run_terminal, description=f"run {run_id} terminal status")
     assert run["status"] == "completed"
     events = (await client.get(f"/runs/{run_id}/events")).json()
     tool_event = next(event for event in events if event["type"] == "tool.completed")
@@ -1354,11 +1364,11 @@ async def test_indirect_prompt_injection_stays_data_and_cannot_forge_provenance(
     )
     assert accepted.status_code == 202
     run_id = accepted.json()["id"]
-    for _ in range(200):
-        run = (await client.get(f"/runs/{run_id}")).json()
-        if run["status"] in {"completed", "failed"}:
-            break
-        await asyncio.sleep(0.01)
+    async def run_terminal() -> dict[str, object] | None:
+        current = (await client.get(f"/runs/{run_id}")).json()
+        return current if current["status"] in {"completed", "failed"} else None
+
+    run = await poll_until(run_terminal, description=f"run {run_id} terminal status")
 
     assert run["status"] == "completed"
     assert "cobalt-harbor" in str(run["output"])
@@ -1396,11 +1406,11 @@ async def test_agent_memory_and_knowledge_search_coexist(client: AsyncClient) ->
         assert accepted.status_code == 202
         run_id = accepted.json()["id"]
         current: dict[str, object] = {}
-        for _ in range(200):
-            current = (await client.get(f"/runs/{run_id}")).json()
-            if current["status"] in {"completed", "failed"}:
-                break
-            await asyncio.sleep(0.01)
+        async def run_terminal() -> dict[str, object] | None:
+            observed = (await client.get(f"/runs/{run_id}")).json()
+            return observed if observed["status"] in {"completed", "failed"} else None
+
+        current = await poll_until(run_terminal, description=f"run {run_id} terminal status")
         assert current["status"] == "completed"
         events = (await client.get(f"/runs/{run_id}/events")).json()
         return current, events

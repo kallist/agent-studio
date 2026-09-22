@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from app.api.routes import router
 from app.persistence.database import Settings
 from app.runtime.providers import MockProvider
+from tests.polling import poll_until
 
 
 async def create_agent(
@@ -29,14 +30,16 @@ async def create_agent(
 
 
 async def wait_for_terminal(client: AsyncClient, run_id: str) -> dict[str, object]:
-    for _ in range(100):
+    async def probe() -> dict[str, object] | None:
         response = await client.get(f"/runs/{run_id}")
         assert response.status_code == 200
         run = response.json()
-        if run["status"] in {"completed", "failed", "cancelled"}:
-            return run
-        await asyncio.sleep(0.01)
-    pytest.fail("run did not reach a terminal status")
+        return run if run["status"] in {"completed", "failed", "cancelled"} else None
+
+    try:
+        return await poll_until(probe, description=f"run {run_id} terminal status")
+    except TimeoutError as exc:
+        pytest.fail(str(exc))
 
 
 @pytest.mark.asyncio

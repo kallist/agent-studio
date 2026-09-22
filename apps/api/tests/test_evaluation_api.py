@@ -11,6 +11,7 @@ from app.domain.contracts import AgentCreate, AgentDecision, RunKind, RunStatus
 from app.main import create_app
 from app.persistence.database import settings
 from app.runtime.providers import MockProvider
+from tests.polling import poll_until
 
 
 async def _agent(
@@ -37,14 +38,20 @@ async def _agent(
 
 
 async def _wait_evaluation(client: AsyncClient, evaluation_run_id: str) -> dict[str, object]:
-    for _ in range(200):
+    async def probe() -> dict[str, object] | None:
         response = await client.get(f"/evaluation-runs/{evaluation_run_id}")
         assert response.status_code == 200
         evaluation = response.json()
         if evaluation["status"] in {"completed", "failed", "cancelled"}:
             return evaluation
-        await asyncio.sleep(0.01)
-    pytest.fail("evaluation did not reach a terminal status")
+        return None
+
+    try:
+        return await poll_until(
+            probe, description=f"evaluation {evaluation_run_id} terminal status"
+        )
+    except TimeoutError as exc:
+        pytest.fail(str(exc))
 
 
 @pytest.mark.asyncio
@@ -234,11 +241,12 @@ async def test_rag_graders_use_completed_retrieval_and_citation_provenance(
     )
     assert uploaded.status_code == 202
     job_id = uploaded.json()["ingestion_job"]["id"]
-    for _ in range(200):
-        job = (await client.get(f"/ingestion-jobs/{job_id}")).json()
-        if job["state"] in {"completed", "failed"}:
-            break
-        await asyncio.sleep(0.01)
+
+    async def ingestion_terminal() -> dict[str, object] | None:
+        current = (await client.get(f"/ingestion-jobs/{job_id}")).json()
+        return current if current["state"] in {"completed", "failed"} else None
+
+    job = await poll_until(ingestion_terminal, description=f"ingestion job {job_id} terminal state")
     assert job["state"] == "completed"
 
     agent = await _agent(

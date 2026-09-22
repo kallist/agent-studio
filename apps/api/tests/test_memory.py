@@ -29,6 +29,7 @@ from app.persistence.database import build_database, settings
 from app.persistence.models import AgentModel, Base
 from app.persistence.repositories import Repositories, _agent_row_statement
 from app.runtime.mock import MockRuntime
+from tests.polling import poll_until
 
 
 async def create_agent(client: AsyncClient, name: str) -> dict[str, object]:
@@ -54,14 +55,17 @@ async def run_to_completion(
     )
     assert accepted.status_code == 202
     run_id = accepted.json()["id"]
-    for _ in range(100):
+
+    async def probe() -> dict[str, object] | None:
         response = await client.get(f"/runs/{run_id}")
         assert response.status_code == 200
         run = response.json()
-        if run["status"] in {"completed", "failed"}:
-            return run
-        await asyncio.sleep(0.01)
-    pytest.fail("run did not reach a terminal status")
+        return run if run["status"] in {"completed", "failed"} else None
+
+    try:
+        return await poll_until(probe, description=f"run {run_id} terminal status")
+    except TimeoutError as exc:
+        pytest.fail(str(exc))
 
 
 async def event_types(client: AsyncClient, run_id: object) -> list[str]:
@@ -653,11 +657,13 @@ def test_ranking_components_threshold_ties_limits_and_context_budget() -> None:
 
 
 async def run_result(client: AsyncClient, run_id: object) -> dict[str, object]:
-    for _ in range(100):
+    async def probe() -> dict[str, object] | None:
         response = await client.get(f"/runs/{run_id}")
         assert response.status_code == 200
         run = response.json()
-        if run["status"] in {"completed", "failed", "cancelled"}:
-            return run
-        await asyncio.sleep(0.01)
-    pytest.fail("run did not reach a terminal status")
+        return run if run["status"] in {"completed", "failed", "cancelled"} else None
+
+    try:
+        return await poll_until(probe, description=f"run {run_id} terminal status")
+    except TimeoutError as exc:
+        pytest.fail(str(exc))
